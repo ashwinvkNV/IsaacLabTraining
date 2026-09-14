@@ -30,15 +30,42 @@ docs = [
   "sphinx-copybutton>=0.5",
   "sphinx-design>=0.6",
 ]
-leapp = ["leapp"]
+leapp = ["leapp==0.6.1"]
 sim = ["isaacsim[all,extscache]==6.1.0.0"]
 
 [tool.uv.sources]
 isaaclab = { git = "https://github.com/isaac-sim/IsaacLab.git", rev = "a8b4da3c29ae528b39d4b3c9444d782ce58d886d", subdirectory = "tools/wheel_builder" }
+torch = [
+  { index = "pytorch-cu128", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+  { index = "pytorch-cu130", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
+]
+torchvision = [
+  { index = "pytorch-cu128", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+  { index = "pytorch-cu130", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
+]
+torchaudio = [
+  { index = "pytorch-cu128", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+  { index = "pytorch-cu130", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
+]
 
 [[tool.uv.index]]
 url = "https://pypi.nvidia.com"
 explicit = false
+
+[[tool.uv.index]]
+name = "pypi-public"
+url = "https://pypi.org/simple"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
 
 [tool.uv]
 environments = ["sys_platform == 'linux'"]
@@ -47,9 +74,11 @@ prerelease = "allow"
 override-dependencies = [
   "mujoco>=3.12.0,<3.13.dev0",
   "mujoco-warp>=3.12.0,<3.13.dev0",
-  "newton[sim]==1.6.0rc1",
-  "torch>=2.10",
-  "torchvision>=0.25",
+  "newton[sim]==1.6.0",
+  "newton-usd-schemas>=0.5.0",
+  "torch==2.11.0",
+  "torchvision==0.26.0",
+  "torchaudio==2.11.0",
 ]
 
 [tool.uv.build-backend]

@@ -138,6 +138,12 @@ from isaaclab_rl.rsl_rl import RslRlBaseRunnerCfg, RslRlVecEnvWrapper, handle_de
 from isaaclab_rl.utils.pretrained_checkpoint import get_published_pretrained_checkpoint
 
 import isaaclab_tasks  # noqa: F401
+from isaaclab_training.export.contracts import (
+    recover_task_space_policy_action,
+    resolve_task_space_input_spec,
+    resolve_task_space_input_terms,
+    task_space_action_scale,
+)
 from isaaclab_training.tasks.displayport_insertion.displayport_insertion_env_cfg import (
     compute_plug_pose,
     compute_socket_root,
@@ -410,7 +416,7 @@ def _extract_lstm_hidden_state(policy) -> tuple[np.ndarray | None, np.ndarray | 
             tt = tt.reshape(1, -1)
         return tt.contiguous().cpu().numpy()
 
-    if isinstance(hs, (tuple, list)):
+    if isinstance(hs, tuple | list):
         if len(hs) == 0:
             return None, None
         h = _env0_layers(hs[0])
@@ -876,13 +882,14 @@ class LeappDisplayportPolicy:
     """Run a LEAPP-exported DisplayPort policy against a ManagerBased gym env.
 
     LEAPP packages observation preprocessing, LSTM state, and action decoding into
-    an ONNX graph that emits **absolute** arm joint targets. This adapter:
+    an ONNX graph. Joint-space graphs emit absolute joint targets; task-space graphs
+    emit scaled Cartesian pose deltas. This adapter:
 
-    1. Reads ``robot_joint_pos`` / ``socket_pos`` / ``socket_quat`` from the live
-       scene and observation terms (so ``--observed_socket_*`` overrides apply).
+    1. Reads the graph's named joint-space or task-space inputs from the matching
+       live observation terms (so ``--observed_socket_*`` overrides apply).
     2. Runs ``InferenceManager.run_policy``.
-    3. Converts absolute targets back to relative action-manager inputs so the
-       existing ``env.step`` / logging path stays unchanged.
+    3. Inverts the graph's deploy-facing output transform so ``env.step`` receives
+       the same normalized action that the original RSL-RL policy produced.
     """
 
     def __init__(self, env, leapp_yaml: Path, clip_actions: float | None = None):
@@ -913,9 +920,17 @@ class LeappDisplayportPolicy:
             pass
 
         self.input_names = list(pipeline["inputs"][self.node_name])
-        self._joint_ids = self._resolve_arm_joint_ids()
+        external_inputs = [name for name in self.input_names if not name.startswith("actor_state_")]
+        task_space_inputs = {"eef_pos", "eef_rot_6d", "socket_kp_pos", "socket_kp_rot_6d"}
+        self._is_task_space = (
+            len(external_inputs) == len(task_space_inputs) and set(external_inputs) == task_space_inputs
+        )
+        self._task_space_input_spec = resolve_task_space_input_spec(self.base.cfg) if self._is_task_space else None
+        self._task_space_input_terms = resolve_task_space_input_terms(self.base.cfg) if self._is_task_space else None
+        self._joint_ids = None if self._is_task_space else self._resolve_arm_joint_ids()
         self.last_outputs: dict[str, torch.Tensor] = {}
         self.last_absolute_targets: np.ndarray | None = None
+        self.last_deploy_action: np.ndarray | None = None
         self.last_rnn_in: np.ndarray | None = None
         self.last_rnn_out: np.ndarray | None = None
         # One-shot override: when set, next __call__ uses these structured inputs
@@ -962,10 +977,47 @@ class LeappDisplayportPolicy:
             out = torch.as_tensor(out, device=self.base.device, dtype=torch.float32)
         return out
 
-    def _gather_inputs(self) -> dict[str, torch.Tensor]:
+    def _gather_inputs(self, obs=None) -> dict[str, torch.Tensor]:
         n = self.base.num_envs
         device = self.base.device
         forced = self._forced_flat_obs
+        if self._is_task_space:
+            values: dict[str, torch.Tensor] = {}
+            if forced is not None:
+                flat = torch.as_tensor(forced, device=device, dtype=torch.float32).reshape(-1)
+                self._forced_flat_obs = None
+                if flat.numel() != 18:
+                    raise ValueError(f"Forced task-space LEAPP obs dim must be 18; got {flat.numel()}.")
+                assert self._task_space_input_spec is not None
+                for name, index, *_ in self._task_space_input_spec:
+                    values[name] = flat[index].unsqueeze(0).expand(n, -1).contiguous()
+            elif obs is not None:
+                try:
+                    policy_obs = obs["policy"]
+                except (KeyError, TypeError):
+                    policy_obs = obs
+                policy_obs = _to_torch(policy_obs)
+                if policy_obs.ndim == 1:
+                    policy_obs = policy_obs.unsqueeze(0)
+                if policy_obs.shape[-1] != 18:
+                    raise ValueError(
+                        f"Task-space policy observation must have 18 values; got {tuple(policy_obs.shape)}."
+                    )
+                if policy_obs.shape[0] != n:
+                    raise ValueError(
+                        f"Task-space observation batch {policy_obs.shape[0]} does not match {n} environments."
+                    )
+                assert self._task_space_input_spec is not None
+                for name, index, *_ in self._task_space_input_spec:
+                    values[name] = policy_obs[:, index]
+            else:
+                assert self._task_space_input_terms is not None
+                for name in self.input_names:
+                    if name.startswith("actor_state_"):
+                        continue
+                    values[name] = self._read_observation_term(self._task_space_input_terms[name])
+            return {f"{self.node_name}/{name}": tensor for name, tensor in values.items()}
+
         if forced is not None:
             # Consume one-shot override. Layout matches NoJointVel ROS obs_order:
             # joint_pos (7) [+ optional joint_vel (7)] + socket_pos (3) + socket_quat (4).
@@ -1085,9 +1137,8 @@ class LeappDisplayportPolicy:
         return self._pack_layer_states([buf[n] for n in names])
 
     def __call__(self, obs=None) -> torch.Tensor:
-        """Run one LEAPP inference step; ``obs`` is ignored (inputs are re-read)."""
-        del obs  # LEAPP graph takes structured I/O, not the flat RSL-RL vector.
-        inputs = self._gather_inputs()
+        """Run one LEAPP inference step from the matching structured policy inputs."""
+        inputs = self._gather_inputs(obs)
 
         # Capture rnn_in from feedback buffers BEFORE inference updates them.
         rnn_in_vec = self._read_feedback_packed()
@@ -1108,11 +1159,35 @@ class LeappDisplayportPolicy:
                 raise KeyError(f"LEAPP outputs missing arm_action. Keys: {list(self.last_outputs.keys())}")
             abs_key = candidates[0]
 
-        absolute = self.last_outputs[abs_key]
+        output = self.last_outputs[abs_key]
+        if self._is_task_space:
+            deploy_action = torch.as_tensor(output, device=self.base.device, dtype=torch.float32)
+            if deploy_action.ndim == 1:
+                deploy_action = deploy_action.unsqueeze(0)
+            if deploy_action.shape[-1] != 6:
+                raise ValueError(f"Task-space LEAPP arm_action must have 6 values; got {tuple(deploy_action.shape)}.")
+            if deploy_action.shape[0] == 1 and self.base.num_envs > 1:
+                deploy_action = deploy_action.expand(self.base.num_envs, -1)
+            elif deploy_action.shape[0] != self.base.num_envs:
+                raise ValueError(
+                    f"Task-space LEAPP batch {deploy_action.shape[0]} does not match {self.base.num_envs} environments."
+                )
+            scale = task_space_action_scale(self.base.cfg, self.base.device, deploy_action.dtype)
+            raw_action = recover_task_space_policy_action(deploy_action, scale, self.clip_actions)
+            actions = torch.zeros(
+                (self.base.num_envs, self.env.num_actions), device=self.base.device, dtype=torch.float32
+            )
+            actions[:, :6] = raw_action
+            self.last_deploy_action = _as_numpy_1d(deploy_action[0])
+            self.last_absolute_targets = None
+            return actions
+
+        absolute = output
         abs_np = _as_numpy_1d(absolute[0] if absolute.ndim > 1 else absolute)
         if abs_np is None:
             raise RuntimeError("Failed to read LEAPP arm_action tensor.")
         self.last_absolute_targets = abs_np.copy()
+        self.last_deploy_action = abs_np.copy()
 
         return _absolute_targets_to_relative_actions(self.env, abs_np, self.clip_actions)
 
@@ -1200,16 +1275,19 @@ def place_plug_at_grasp_pose(
     held_object.write_root_pose_to_sim_index(root_pose=new_root_pose, env_ids=env_ids)
     held_object.write_root_velocity_to_sim_index(root_velocity=zero_velocity, env_ids=env_ids)
 
-    all_joints, _ = robot.find_joints([".*"])
+    all_joints, all_joint_names = robot.find_joints([".*"])
     finger_joints = all_joints[num_arm_joints:]
+    joint_name_to_idx = dict(zip(all_joint_names, all_joints, strict=True))
     joint_pos = wp.to_torch(robot.data.joint_pos)[env_ids].clone()
     joint_vel = torch.zeros_like(joint_pos)
 
-    gripper_joint_setter_func(joint_pos, list(range(num_reset_envs)), finger_joints, hand_hold_width)
+    gripper_joint_setter_func(joint_pos, list(range(num_reset_envs)), finger_joints, hand_hold_width, joint_name_to_idx)
     robot.write_joint_position_to_sim_index(position=joint_pos, env_ids=env_ids)
     robot.write_joint_velocity_to_sim_index(velocity=joint_vel, env_ids=env_ids)
 
-    gripper_joint_setter_func(joint_pos, list(range(num_reset_envs)), finger_joints, hand_close_width)
+    gripper_joint_setter_func(
+        joint_pos, list(range(num_reset_envs)), finger_joints, hand_close_width, joint_name_to_idx
+    )
     robot.set_joint_position_target_index(target=joint_pos, joint_ids=all_joints, env_ids=env_ids)
 
 
@@ -1242,6 +1320,15 @@ class _FixedObservedSocketQuat:
 
     def reset(self, env_ids=None):
         pass
+
+
+class _FixedObservedSocketRot6D(_FixedObservedSocketQuat):
+    """Override a socket 6D-rotation observation from a fixed world quaternion."""
+
+    def __call__(self, env, **kwargs):
+        quat = super().__call__(env, **kwargs)
+        rot_mat = math_utils.matrix_from_quat(quat)
+        return rot_mat[..., :2, :].reshape(env.num_envs, 6)
 
 
 def _flatten_policy_obs(obs) -> np.ndarray | None:
@@ -1277,10 +1364,10 @@ class InferenceLogger:
 
     Column convention (aligned with the real synced-bundle logger):
 
-    * ``action_{i}`` — absolute arm joint target [rad] the policy asked for,
-      decoded as ``q_at_policy_time + scale * action_raw``. Matches real
-      ``action_*``, which for this LEAPP export already lives in joint-angle
-      space and is likewise anchored once on the measured joint position.
+    * ``action_{i}`` — deploy-facing policy command. For joint space this is the
+      absolute joint target [rad], decoded as ``q_at_policy_time + scale *
+      action_raw``. For task space this is the scaled Cartesian pose delta
+      ``[m, m, m, rad, rad, rad]``.
     * ``action_raw_{i}`` — sim-only: normalized network output before the action
       term scales/decodes it.
     * ``rnn_in_{i}`` — LSTM state fed into this inference step (zeros after reset).
@@ -1288,9 +1375,9 @@ class InferenceLogger:
       ``rnn_in_*`` equals this step's ``rnn_out_*``.
     * ``controller_step`` / ``policy_ros_time`` — sim aliases of ``step`` /
       ``ros_time`` so columns align with the real bundle logger.
-    * ``blend_cmd_<name>`` — absolute command applied this cycle. In sim there is
-      no safety blend, so this equals ``action_*``.
-    * ``target_joint_pos_{i}`` — sim-only: ``joint_pos_target`` as it stands after
+    * ``blend_cmd_<name>`` — joint-space only: absolute command applied this cycle.
+      In sim there is no safety blend, so this equals ``action_*``.
+    * ``target_joint_pos_{i}`` — joint-space, sim-only: ``joint_pos_target`` after
       ``env.step()``. :class:`RelativeJointPositionAction` re-anchors on the live
       joint position at every one of the ``decimation`` physics substeps, so this
       is anchored on the *last* substep and is larger than ``action_*``. Use it to
@@ -1312,6 +1399,11 @@ class InferenceLogger:
         self._fieldnames: list[str] | None = None
         self._t0 = time.time()
         self._action_scale = _action_scale(env)
+        action_cfg = self.base.cfg.actions.arm_action
+        self._is_task_space = hasattr(action_cfg, "position_scale") and hasattr(action_cfg, "orientation_scale")
+        self._task_space_action_scale = (
+            _as_numpy_1d(task_space_action_scale(self.base.cfg, "cpu", torch.float64)) if self._is_task_space else None
+        )
         # Arm joint positions sampled when the policy ran, carried from
         # begin_step() to end_step() to decode action_* the way real does.
         self._arm_q_at_policy: np.ndarray | None = None
@@ -1418,7 +1510,7 @@ class InferenceLogger:
     def _resolve_goal_pose(self) -> tuple[np.ndarray | None, np.ndarray | None]:
         """Return (pos_w, quat_xyzw) for the policy goal / socket.
 
-        Uses the live ``socket_pos`` / ``socket_quat`` observation callables when present
+        Uses the live socket position/quaternion observation callables when present
         (so ``--observed_socket_*`` overrides are reflected), otherwise the true socket root.
         """
         scene = self.base.scene
@@ -1434,19 +1526,27 @@ class InferenceLogger:
             cfgs = list(obs_mgr._group_obs_term_cfgs["policy"])
             origins = _as_numpy_1d(_to_torch(scene.env_origins)[0])
             for name, cfg in zip(names, cfgs):
-                if name not in ("socket_pos", "socket_quat"):
+                if name not in (
+                    "socket_pos",
+                    "socket_kp_pos",
+                    "socket_quat",
+                    "socket_rot_6d",
+                    "socket_kp_rot_6d",
+                ):
                     continue
                 out = cfg.func(self.base, **cfg.params)
                 arr = _as_numpy_1d(out[0] if hasattr(out, "__getitem__") else out)
                 if arr is None:
                     continue
-                if name == "socket_pos" and arr.shape[0] >= 3:
+                if name in ("socket_pos", "socket_kp_pos") and arr.shape[0] >= 3:
                     # Observation terms are in env frame; convert to world.
                     goal_pos = arr[:3].copy()
                     if origins is not None:
                         goal_pos = goal_pos + origins[:3]
                 elif name == "socket_quat" and arr.shape[0] >= 4:
                     goal_quat = arr[:4].copy()
+                elif name in ("socket_rot_6d", "socket_kp_rot_6d") and hasattr(cfg.func, "rot_w"):
+                    goal_quat = _as_numpy_1d(cfg.func.rot_w)
         except Exception:
             pass
         return goal_pos, goal_quat
@@ -1558,7 +1658,7 @@ class InferenceLogger:
             target = _as_numpy_1d(_to_torch(robot.data.joint_pos_target)[0])
         except Exception:
             target = None
-        if target is not None:
+        if target is not None and not self._is_task_space:
             arm_n = min(num_arm, len(target))
             for i in range(arm_n):
                 # joint_pos_target as left by the action term. RelativeJointPositionAction
@@ -1570,17 +1670,26 @@ class InferenceLogger:
         # once on the joint position it observed: q + scale * raw. This is the real
         # robot's convention (single command per control cycle), so the columns stay
         # comparable across sim and hardware.
-        q0 = self._arm_q_at_policy
-        arm_n = min(num_arm, 0 if q0 is None else len(q0))
-        raw = [row.get(f"action_raw_{i}") for i in range(arm_n)]
-        if arm_n and all(v is not None for v in raw):
+        if self._is_task_space:
+            assert self._task_space_action_scale is not None
+            action_n = len(self._task_space_action_scale)
+            raw = [row.get(f"action_raw_{i}") for i in range(action_n)]
+            if all(value is not None for value in raw):
+                deploy_action = self._task_space_action_scale * np.asarray(raw, dtype=np.float64)
+                for i, value in enumerate(deploy_action.tolist()):
+                    row[f"action_{i}"] = float(value)
+        else:
+            q0 = self._arm_q_at_policy
+            arm_n = min(num_arm, 0 if q0 is None else len(q0))
+            raw = [row.get(f"action_raw_{i}") for i in range(arm_n)]
+        if not self._is_task_space and arm_n and all(v is not None for v in raw):
             policy_target = q0[:arm_n] + self._action_scale * np.asarray(raw, dtype=np.float64)
             names = joint_names[:arm_n] if joint_names else [f"joint{i + 1}" for i in range(arm_n)]
             for i, val in enumerate(policy_target.tolist()):
                 row[f"action_{i}"] = float(val)
             for name, val in zip(names, policy_target.tolist()):
                 row[f"blend_cmd_{name}"] = float(val)
-        elif target is not None:
+        elif not self._is_task_space and target is not None:
             # Replay mode has no action_raw_*; fall back to the applied target.
             arm_n = min(num_arm, len(target))
             names = joint_names[:arm_n] if joint_names else [f"joint{i + 1}" for i in range(arm_n)]
@@ -1768,12 +1877,15 @@ def _apply_observed_socket_override(env) -> dict[str, Any]:
     term_cfgs = obs_mgr._group_obs_term_cfgs["policy"]
 
     for name, term_cfg in zip(term_names, term_cfgs):
-        if name == "socket_pos" and args_cli.observed_socket_pos is not None:
+        if name in ("socket_pos", "socket_kp_pos") and args_cli.observed_socket_pos is not None:
             term_cfg.func = _FixedObservedSocketPos(base, args_cli.observed_socket_pos)
             term_cfg.noise = None
             meta["observed_socket_pos"] = list(args_cli.observed_socket_pos)
         elif name == "socket_quat" and args_cli.observed_socket_rot is not None:
             term_cfg.func = _FixedObservedSocketQuat(base, args_cli.observed_socket_rot)
+            meta["observed_socket_rot"] = list(args_cli.observed_socket_rot)
+        elif name in ("socket_rot_6d", "socket_kp_rot_6d") and args_cli.observed_socket_rot is not None:
+            term_cfg.func = _FixedObservedSocketRot6D(base, args_cli.observed_socket_rot)
             meta["observed_socket_rot"] = list(args_cli.observed_socket_rot)
 
     print("[INFO] Observed (policy-visible) socket pose override applied:")

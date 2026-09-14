@@ -12,6 +12,9 @@ EXPECTED_TASKS = {
     "IsaacTraining-DisplayPortInsertion-Rizon4s-Joint-NoJointVel-ROS-Inference",
     "IsaacTraining-DisplayPortInsertion-Rizon4s-Joint-ROS-Inference",
     "IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace",
+    "IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton",
+    "IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-Play",
+    "IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-ROS-Inference",
     "IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Play",
     "IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference",
 }
@@ -24,6 +27,9 @@ EXPECTED_ALIASES = {
     "IsaacContrib-Deploy-DisplayportInsertion-Rizon4s-Grav-NoJointVel-ROS-Inference",
     "IsaacContrib-Deploy-DisplayportInsertion-Rizon4s-Grav-ROS-Inference",
     "IsaacContrib-Deploy-DisplayportInsertion-Rizon4s-Grav-TaskSpace",
+    "IsaacContrib-Deploy-DisplayportInsertion-Rizon4s-Grav-TaskSpace-Newton",
+    "IsaacContrib-Deploy-DisplayportInsertion-Rizon4s-Grav-TaskSpace-Newton-Play",
+    "IsaacContrib-Deploy-DisplayportInsertion-Rizon4s-Grav-TaskSpace-Newton-ROS-Inference",
     "IsaacContrib-Deploy-DisplayportInsertion-Rizon4s-Grav-TaskSpace-Play",
     "IsaacContrib-Deploy-DisplayportInsertion-Rizon4s-Grav-TaskSpace-ROS-Inference",
 }

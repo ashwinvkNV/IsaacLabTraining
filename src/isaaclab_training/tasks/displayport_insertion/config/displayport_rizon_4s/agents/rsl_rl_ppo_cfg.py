@@ -17,7 +17,7 @@ class Rizon4sGravDisplayportInsertionRNNPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     clip_actions = 1.0
     resume = False
     obs_groups = {
-        "policy": ["policy"],
+        "actor": ["policy"],
         "critic": ["critic"],
     }
     policy = RslRlPpoActorCriticRecurrentCfg(
@@ -47,3 +47,12 @@ class Rizon4sGravDisplayportInsertionRNNPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         desired_kl=0.008,
         max_grad_norm=1.0,
     )
+
+
+@configclass
+class Rizon4sGravDisplayportInsertionNewtonRNNPPORunnerCfg(Rizon4sGravDisplayportInsertionRNNPPORunnerCfg):
+    """RSL-RL runner for the Newton task-space training profile."""
+
+    seed = 123
+    max_iterations = 1000
+    experiment_name = "displayport_insertion_rizon4s_newton_osc"

@@ -1,0 +1,63 @@
+[build-system]
+requires = ["uv_build>=0.12.6,<0.13"]
+build-backend = "uv_build"
+
+[project]
+name = "isaaclab-training"
+version = "0.1.0"
+description = "Generic Isaac Lab downstream training tasks and export tools"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "isaaclab",
+  "pyyaml",
+]
+
+[project.entry-points."isaaclab.tasks"]
+training-tasks = "isaaclab_training.tasks"
+
+[project.scripts]
+isaaclab-training-play-policy-io = "isaaclab_training.cli.play_policy_io:main"
+isaaclab-training-export = "isaaclab_training.cli.export_policy:main"
+
+[dependency-groups]
+dev = ["codespell>=2.4", "pre-commit>=4.2", "pytest>=8.3", "ruff>=0.11"]
+leapp = ["leapp"]
+
+[tool.uv.sources]
+isaaclab = { git = "https://github.com/isaac-sim/IsaacLab.git", rev = "a8b4da3c29ae528b39d4b3c9444d782ce58d886d", subdirectory = "tools/wheel_builder" }
+
+[tool.uv]
+override-dependencies = [
+  "torch>=2.10",
+  "torchvision>=0.25",
+]
+
+[tool.uv.build-backend]
+module-name = "isaaclab_training"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = [
+  # Isaac Lab config classes commonly use class attributes to declare config fields.
+  "B008",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"src/isaaclab_training/cli/play_policy_io.py" = ["B905", "I001"]
+"src/isaaclab_training/mdp/**/*.py" = ["B006", "B007", "E402", "E501", "I001", "SIM118"]
+"src/isaaclab_training/mdp/__init__.pyi" = ["F403", "I001"]
+"src/isaaclab_training/tasks/displayport_insertion/**/*.py" = ["B006", "B007", "E402", "E501", "I001", "SIM118"]
+
+[tool.codespell]
+skip = "*.usd,*.usda,*.usdc,*.json,*.onnx,*.pt,*.mp4,*.data,uv.lock,logs"
+ignore-words-list = "leapp,nd"

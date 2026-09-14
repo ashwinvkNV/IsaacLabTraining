@@ -8,12 +8,28 @@ Documentation: https://ashwinvknv.github.io/IsaacLabTraining/
 
 ## Setup
 
-Python 3.12 and `uv` are expected.
+Python 3.12 and `uv` are expected. The Isaac Lab dependency is declared in
+`pyproject.toml` and pinned in `uv.lock`; `uv sync` installs this repo in editable
+mode and resolves the pinned Isaac Lab wheel-builder package.
 
 ```bash
 uv sync
+```
+
+Optional local development groups:
+
+```bash
+uv sync --group dev
+uv sync --group docs
+uv sync --group leapp
+```
+
+Validate the install:
+
+```bash
 uv run pytest -q
 uv run ruff check .
+uv run python -c 'import gymnasium as gym; import isaaclab_training.tasks; print([s.id for s in gym.registry.values() if s.id.startswith("IsaacTraining-")])'
 ```
 
 Build the docs locally:
@@ -22,11 +38,18 @@ Build the docs locally:
 uv run --group docs make -C docs current-docs
 ```
 
-Confirm Isaac Lab discovers the downstream tasks:
+Run a small visual training smoke test:
 
 ```bash
-uv run python -c 'import gymnasium as gym; import isaaclab_training.tasks; print([s.id for s in gym.registry.values() if s.id.startswith("IsaacTraining-")])'
+uv run isaaclab train --rl_library rsl_rl \
+  --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference \
+  --num_envs 4 \
+  --max_iterations 100 \
+  --visualizer kit
 ```
+
+For the full install and training workflow, see the hosted documentation:
+https://ashwinvknv.github.io/IsaacLabTraining/setup_training.html
 
 ## Concepts
 

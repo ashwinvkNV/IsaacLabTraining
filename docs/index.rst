@@ -4,6 +4,36 @@ IsaacLab Training
 Reusable downstream Isaac Lab training repository for custom task formulations,
 shared MDP terms, and policy export workflows.
 
+Quick Start
+-----------
+
+Install the standalone training repo and its pinned Isaac Lab dependency:
+
+.. code-block:: bash
+
+   git clone https://github.com/ashwinvkNV/IsaacLabTraining.git
+   cd IsaacLabTraining
+   uv sync
+
+Verify that Isaac Lab discovers the downstream tasks:
+
+.. code-block:: bash
+
+   uv run python -c 'import gymnasium as gym; import isaaclab_training.tasks; print([s.id for s in gym.registry.values() if s.id.startswith("IsaacTraining-")])'
+
+Run a small visual training smoke test:
+
+.. code-block:: bash
+
+   uv run isaaclab train --rl_library rsl_rl \
+     --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference \
+     --num_envs 4 \
+     --max_iterations 100 \
+     --visualizer kit
+
+See :doc:`setup_training` for the complete install, source-checkout, and
+headless-training workflow.
+
 Trainable Policies
 ------------------
 
@@ -60,6 +90,7 @@ formulations.
    :caption: Guides
    :hidden:
 
+   setup_training
    repo_structure
 
 .. toctree::

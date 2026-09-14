@@ -31,12 +31,23 @@ docs = [
   "sphinx-design>=0.6",
 ]
 leapp = ["leapp"]
+sim = ["isaacsim[all,extscache]==6.1.0.0"]
 
 [tool.uv.sources]
 isaaclab = { git = "https://github.com/isaac-sim/IsaacLab.git", rev = "a8b4da3c29ae528b39d4b3c9444d782ce58d886d", subdirectory = "tools/wheel_builder" }
 
+[[tool.uv.index]]
+url = "https://pypi.nvidia.com"
+explicit = false
+
 [tool.uv]
+environments = ["sys_platform == 'linux'"]
+index-strategy = "unsafe-best-match"
+prerelease = "allow"
 override-dependencies = [
+  "mujoco>=3.12.0,<3.13.dev0",
+  "mujoco-warp>=3.12.0,<3.13.dev0",
+  "newton[sim]==1.6.0rc1",
   "torch>=2.10",
   "torchvision>=0.25",
 ]

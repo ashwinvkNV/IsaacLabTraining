@@ -10,7 +10,8 @@ Documentation: https://ashwinvknv.github.io/IsaacLabTraining/
 
 Python 3.12 and `uv` are expected. The Isaac Lab dependency is declared in
 `pyproject.toml` and pinned in `uv.lock`; `uv sync` installs this repo in editable
-mode and resolves the pinned Isaac Lab wheel-builder package.
+mode and resolves the pinned Isaac Lab wheel-builder package. Actual PhysX / Kit
+training also requires Isaac Sim, installed through the `sim` dependency group.
 
 ```bash
 uv sync
@@ -22,6 +23,7 @@ Optional local development groups:
 uv sync --group dev
 uv sync --group docs
 uv sync --group leapp
+uv sync --group sim
 ```
 
 Validate the install:
@@ -41,6 +43,8 @@ uv run --group docs make -C docs current-docs
 Run a small visual training smoke test:
 
 ```bash
+uv sync --group sim
+
 uv run isaaclab train --rl_library rsl_rl \
   --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference \
   --num_envs 4 \

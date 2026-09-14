@@ -10,6 +10,8 @@ the simulator integration, unified training entry points, and RSL-RL runner.
 - Python 3.12.
 - `uv` for Python environment management.
 - Git access to this repository and the pinned Isaac Lab dependency.
+- Isaac Sim for PhysX / Kit training. In the standalone `uv` workflow below,
+  install it with the `sim` dependency group.
 
 Install `uv` if it is not already available:
 
@@ -35,12 +37,24 @@ resolves Isaac Lab from the pinned Isaac Lab wheel-builder source:
 isaaclab = { git = "https://github.com/isaac-sim/IsaacLab.git", subdirectory = "tools/wheel_builder", ... }
 ```
 
+This base install is enough for package imports, docs, tests, and task
+registration checks. PhysX / Kit training additionally requires Isaac Sim:
+
+```bash
+uv sync --group sim
+```
+
+The `sim` group installs Isaac Sim through NVIDIA's Python package index. The
+resolver also carries the small compatibility overrides needed by the pinned
+Isaac Lab revision.
+
 Use dependency groups for optional local workflows:
 
 ```bash
 uv sync --group dev      # tests, ruff, pre-commit, codespell
 uv sync --group docs     # Sphinx docs build
 uv sync --group leapp    # LEAPP export tooling
+uv sync --group sim      # Isaac Sim for PhysX / Kit training
 ```
 
 ## Verify the Install
@@ -57,6 +71,12 @@ The second command should list the registered `IsaacTraining-*` task IDs.
 
 ## Train a DisplayPort Policy
 
+Install the simulation group before training:
+
+```bash
+uv sync --group sim
+```
+
 Task-space control is the recommended DisplayPort deployment path:
 
 ```bash
@@ -69,6 +89,9 @@ uv run isaaclab train --rl_library rsl_rl \
 
 Use this small visual run first to confirm that Isaac Sim launches, the task is
 registered, and the robot/plug/socket scene looks correct.
+
+If this command reports `Isaac Sim is not installed or not found on PYTHONPATH`,
+run `uv sync --group sim` or use the Isaac Lab source-checkout workflow below.
 
 For a longer headless training run:
 

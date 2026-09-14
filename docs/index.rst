@@ -25,6 +25,8 @@ Run a small visual training smoke test:
 
 .. code-block:: bash
 
+   uv sync --group sim
+
    uv run isaaclab train --rl_library rsl_rl \
      --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference \
      --num_envs 4 \

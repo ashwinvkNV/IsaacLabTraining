@@ -2,7 +2,7 @@
 
 Reusable downstream Isaac Lab training repository for custom task formulations, shared MDP terms, and policy export workflows.
 
-This repo owns reusable MDP terms, task registrations, policy I/O tooling, and LEAPP export contracts outside the core Isaac Lab tree. DisplayPort insertion is the first concrete task packaged here.
+This repo owns reusable MDP terms, task registrations, policy I/O tooling, and LEAPP export helpers outside the core Isaac Lab tree. DisplayPort insertion is the first concrete task packaged here.
 
 ## Setup
 
@@ -12,6 +12,12 @@ Python 3.12 and `uv` are expected.
 uv sync
 uv run pytest -q
 uv run ruff check .
+```
+
+Build the docs locally:
+
+```bash
+uv run --group docs make -C docs current-docs
 ```
 
 Confirm Isaac Lab discovers the downstream tasks:
@@ -31,7 +37,7 @@ uv run python -c 'import gymnasium as gym; import isaaclab_training.tasks; print
 - plug/object drop and orientation termination helpers
 - reset-sampled noise models
 
-`isaaclab_training.export` contains generic LEAPP export infrastructure. Task-specific output semantics live behind named contracts. The first contract is:
+`isaaclab_training.export` contains generic LEAPP export infrastructure. The first task-specific export path is:
 
 ```text
 displayport_task_space
@@ -66,7 +72,7 @@ uv run isaaclab train --rl_library rsl_rl \
 
 ## Export
 
-Use the generic exporter with a named contract:
+Use the generic exporter for task-space DisplayPort export:
 
 ```bash
 uv run --group leapp isaaclab-training-export \
@@ -82,7 +88,7 @@ The exporter uses packaged Isaac Lab APIs for app launch, Hydra task resolution,
 ```text
 src/isaaclab_training/
   mdp/                           reusable MDP/action/observation/reward/event terms
-  export/                        generic LEAPP export contracts
+  export/                        generic LEAPP export helpers
   tasks/displayport_insertion/   first concrete task formulation
   cli/                           generic export and policy I/O commands
   utils/
@@ -90,4 +96,4 @@ docs/
 tests/
 ```
 
-The long-form DisplayPort tutorial is kept in `docs/displayport_insertion_policy.rst`.
+The long-form DisplayPort tutorial is kept in `docs/tasks/displayport_insertion.rst`.

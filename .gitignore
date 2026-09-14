@@ -6,6 +6,7 @@ __pycache__/
 .venv/
 build/
 dist/
+docs/_build/
 logs/
 outputs/
 wandb/
@@ -13,4 +14,5 @@ wandb/
 *.pt
 *.safetensors
 *.png
+!docs/_static/**/*.png
 *.mp4

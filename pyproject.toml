@@ -106,5 +106,5 @@ ignore = [
 "src/isaaclab_training/tasks/displayport_insertion/**/*.py" = ["B006", "B007", "E402", "E501", "I001", "SIM118"]
 
 [tool.codespell]
-skip = "*.usd,*.usda,*.usdc,*.json,*.onnx,*.pt,*.mp4,*.data,uv.lock,logs"
+skip = "./docs/_build/*,*.usd,*.usda,*.usdc,*.json,*.onnx,*.pt,*.mp4,*.data,uv.lock,logs"
 ignore-words-list = "leapp,nd"

@@ -71,7 +71,7 @@ The second command should list the registered `IsaacTraining-*` task IDs.
 
 ## Train a DisplayPort Policy
 
-Install the simulation group before training:
+Install the simulation group before PhysX or Kit training:
 
 ```bash
 uv sync --group sim
@@ -82,13 +82,29 @@ Task-space control is the recommended DisplayPort deployment path:
 ```bash
 uv run isaaclab train --rl_library rsl_rl \
   --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference \
-  --num_envs 4 \
-  --max_iterations 100 \
+  --num_envs 16 \
+  --max_iterations 1 \
   --visualizer kit
 ```
 
 Use this small visual run first to confirm that Isaac Sim launches, the task is
 registered, and the robot/plug/socket scene looks correct.
+
+The Newton task is a separate checkpoint ABI. Run a finite headless optimizer smoke with the typed Newton physics
+selection before launching a full job:
+
+```bash
+uv run isaaclab train --rl_library rsl_rl \
+  --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-ROS-Inference \
+  --num_envs 16 \
+  --max_iterations 1 \
+  --seed 123 \
+  --visualizer none \
+  physics=newton_sdf
+```
+
+The recurrent PPO configuration uses 16 minibatches. Keep training smokes at 16 or more environments, or explicitly
+set `agent.algorithm.num_mini_batches` no higher than `--num_envs`. Use `isaaclab play` for smaller visual checks.
 
 If this command reports `Isaac Sim is not installed or not found on PYTHONPATH`,
 run `uv sync --group sim` or use the Isaac Lab source-checkout workflow below.
@@ -102,6 +118,24 @@ uv run isaaclab train --rl_library rsl_rl \
   --viz none \
   --video --video_length 200 --video_interval 76800
 ```
+
+For the recommended Newton 1.6 task-space profile, use 256 environments per distributed rank and the calibrated
+USD for the robot that will execute the policy:
+
+```bash
+uv run isaaclab train --rl_library rsl_rl \
+  --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-ROS-Inference \
+  --num_envs 256 \
+  --seed 123 \
+  --visualizer none \
+  physics=newton_sdf \
+  env.scene.robot.spawn.usd_path=/absolute/path/to/calibrated_rizon4s.usd
+```
+
+Verify that the calibrated USD authors valid mass and inertia properties, including for the flange. Treat any Newton
+invalid-inertia fallback as an asset error to fix and requalify before full training. Repeat the calibrated-USD
+override when playing or exporting this checkpoint. Newton and PhysX task-space
+checkpoints are not interchangeable even though both actor inputs contain 18 values.
 
 Joint-space training is also packaged:
 
@@ -131,8 +165,8 @@ cd /path/to/IsaacLab
 
 ./isaaclab.sh train --rl_library rsl_rl \
   --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference \
-  --num_envs 4 \
-  --max_iterations 100 \
+  --num_envs 16 \
+  --max_iterations 1 \
   --visualizer kit
 ```
 

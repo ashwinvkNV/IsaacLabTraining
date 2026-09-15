@@ -139,6 +139,7 @@ from isaaclab_rl.utils.pretrained_checkpoint import get_published_pretrained_che
 
 import isaaclab_tasks  # noqa: F401
 from isaaclab_training.export.contracts import (
+    process_task_space_action,
     recover_task_space_policy_action,
     resolve_task_space_input_spec,
     resolve_task_space_input_terms,
@@ -1367,7 +1368,7 @@ class InferenceLogger:
     * ``action_{i}`` — deploy-facing policy command. For joint space this is the
       absolute joint target [rad], decoded as ``q_at_policy_time + scale *
       action_raw``. For task space this is the scaled Cartesian pose delta
-      ``[m, m, m, rad, rad, rad]``.
+      ``[m, m, m, rad, rad, rad]`` after applying the runner action clip.
     * ``action_raw_{i}`` — sim-only: normalized network output before the action
       term scales/decodes it.
     * ``rnn_in_{i}`` — LSTM state fed into this inference step (zeros after reset).
@@ -1387,12 +1388,20 @@ class InferenceLogger:
     Extra sim-only columns (plug/socket GT, success metrics, episode) are appended.
     """
 
-    def __init__(self, env, log_dir: Path | None, print_enabled: bool, print_every: int):
+    def __init__(
+        self,
+        env,
+        log_dir: Path | None,
+        print_enabled: bool,
+        print_every: int,
+        clip_actions: float | None = None,
+    ):
         self.env = env
         self.base = env.unwrapped
         self.log_dir = log_dir
         self.print_enabled = print_enabled
         self.print_every = max(1, print_every)
+        self._clip_actions = clip_actions
         self.rows: list[dict[str, Any]] = []
         # Match real-robot logger filename for drop-in use with plot_sim_real_compare.py.
         self.csv_path = (log_dir / "policy_io.csv") if log_dir is not None else None
@@ -1675,7 +1684,9 @@ class InferenceLogger:
             action_n = len(self._task_space_action_scale)
             raw = [row.get(f"action_raw_{i}") for i in range(action_n)]
             if all(value is not None for value in raw):
-                deploy_action = self._task_space_action_scale * np.asarray(raw, dtype=np.float64)
+                raw_action = torch.as_tensor(raw, dtype=torch.float64)
+                scale = torch.as_tensor(self._task_space_action_scale, dtype=torch.float64)
+                deploy_action = process_task_space_action(raw_action, scale, self._clip_actions)
                 for i, value in enumerate(deploy_action.tolist()):
                     row[f"action_{i}"] = float(value)
         else:
@@ -2076,6 +2087,7 @@ def main(  # noqa: C901
             log_dir=log_dir,
             print_enabled=not args_cli.no_print,
             print_every=args_cli.print_every,
+            clip_actions=agent_cfg.clip_actions,
         )
         success_tracker = SuccessTracker(env)
 

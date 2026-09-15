@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, newton]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify lockfile
+        run: uv lock --check
+
+      - name: Install test and documentation dependencies
+        run: uv sync --frozen --group dev --group docs
+
+      - name: Run tests
+        run: uv run --frozen pytest -q
+
+      - name: Run Ruff lint
+        run: uv run --frozen ruff check .
+
+      - name: Check Ruff formatting
+        run: uv run --frozen ruff format --check .
+
+      - name: Check spelling
+        run: uv run --frozen codespell
+
+      - name: Build documentation with warnings as errors
+        run: uv run --frozen sphinx-build -W --keep-going -j auto docs docs/_build/ci

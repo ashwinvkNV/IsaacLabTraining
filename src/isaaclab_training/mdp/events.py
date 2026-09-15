@@ -7,7 +7,9 @@
 
 from __future__ import annotations
 
+import inspect
 import random
+import warnings
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -33,6 +35,41 @@ def _body_link_jacobian_for_ik(asset: Articulation, env_ids: torch.Tensor, body_
         :,
         asset.num_base_dofs :,
     ]
+
+
+def _gripper_joint_setter_call_mode(callback: Callable[..., None]) -> str:
+    """Return how a gripper callback accepts the optional joint-name mapping."""
+    try:
+        callback_signature = inspect.signature(callback)
+    except (TypeError, ValueError):
+        # Some extension callables do not expose a Python signature. Preserve the
+        # historical four-argument contract for those callbacks.
+        return "legacy"
+
+    legacy_args = (None, None, None, None)
+    try:
+        callback_signature.bind(*legacy_args, joint_name_to_idx=None)
+    except TypeError:
+        pass
+    else:
+        return "keyword"
+
+    try:
+        callback_signature.bind(*legacy_args, None)
+    except TypeError:
+        pass
+    else:
+        return "positional"
+
+    try:
+        callback_signature.bind(*legacy_args)
+    except TypeError as exc:
+        raise TypeError(
+            "gripper_joint_setter_func must accept four legacy arguments "
+            "(joint_pos, reset_indices, finger_joints, finger_joint_position) and may accept "
+            "joint_name_to_idx as a fifth positional or keyword argument."
+        ) from exc
+    return "legacy"
 
 
 class randomize_gear_type(ManagerTermBase):
@@ -559,6 +596,8 @@ class set_robot_to_object_grasp_pose(ManagerTermBase):
         self.end_effector_body_name: str = cfg.params["end_effector_body_name"]
         self.num_arm_joints: int = cfg.params["num_arm_joints"]
         self.gripper_joint_setter_func = cfg.params["gripper_joint_setter_func"]
+        self._gripper_joint_setter_mode: str | None = None
+        self._resolve_gripper_joint_setter_call_mode()
         self.target_object_name: str = cfg.params["target_object_name"]
 
         grasp_offset = cfg.params.get("grasp_offset", [0.0, 0.0, 0.0])
@@ -587,6 +626,40 @@ class set_robot_to_object_grasp_pose(ManagerTermBase):
         self.all_joints = all_joints
         self.finger_joints = all_joints[self.num_arm_joints :]
         self.joint_name_to_idx = dict(zip(all_joint_names, all_joints, strict=True))
+
+    def _resolve_gripper_joint_setter_call_mode(self) -> str:
+        """Resolve and cache the callback signature used by this reset term."""
+        mode = getattr(self, "_gripper_joint_setter_mode", None)
+        if mode is not None:
+            return mode
+
+        mode = _gripper_joint_setter_call_mode(self.gripper_joint_setter_func)
+        self._gripper_joint_setter_mode = mode
+        if mode == "legacy":
+            warnings.warn(
+                "Four-argument gripper_joint_setter_func callbacks are deprecated; accept "
+                "joint_name_to_idx as a fifth positional or keyword argument.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+        return mode
+
+    def _set_gripper_joint_position(
+        self,
+        joint_pos: torch.Tensor,
+        reset_indices: list[int],
+        finger_joints: list[int],
+        finger_joint_position: float,
+    ) -> None:
+        """Invoke a new or legacy gripper callback without masking callback errors."""
+        mode = self._resolve_gripper_joint_setter_call_mode()
+        args = (joint_pos, reset_indices, finger_joints, finger_joint_position)
+        if mode == "keyword":
+            self.gripper_joint_setter_func(*args, joint_name_to_idx=self.joint_name_to_idx)
+        elif mode == "positional":
+            self.gripper_joint_setter_func(*args, self.joint_name_to_idx)
+        else:
+            self.gripper_joint_setter_func(*args)
 
     def __call__(
         self,
@@ -708,22 +781,20 @@ class set_robot_to_object_grasp_pose(ManagerTermBase):
         # Write gripper STATE at ``hand_hold_width`` (fingers just touching the
         # plug, no mesh overlap) and set the TARGET to ``hand_close_width``
         # (fully closed) so the actuator drive squeezes around the plug.
-        self.gripper_joint_setter_func(
+        self._set_gripper_joint_position(
             joint_pos,
             list(range(num_reset_envs)),
             self.finger_joints,
             self.hand_hold_width,
-            self.joint_name_to_idx,
         )
         self.robot_asset.write_joint_position_to_sim_index(position=joint_pos, env_ids=env_ids)
         self.robot_asset.write_joint_velocity_to_sim_index(velocity=joint_vel, env_ids=env_ids)
 
-        self.gripper_joint_setter_func(
+        self._set_gripper_joint_position(
             joint_pos,
             list(range(num_reset_envs)),
             self.finger_joints,
             self.hand_close_width,
-            self.joint_name_to_idx,
         )
         self.robot_asset.set_joint_position_target_index(target=joint_pos, joint_ids=self.all_joints, env_ids=env_ids)
 

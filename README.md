@@ -47,8 +47,8 @@ uv sync --group sim
 
 uv run isaaclab train --rl_library rsl_rl \
   --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference \
-  --num_envs 4 \
-  --max_iterations 100 \
+  --num_envs 16 \
+  --max_iterations 1 \
   --visualizer kit
 ```
 
@@ -106,14 +106,14 @@ uv run isaaclab train --rl_library rsl_rl \
 ### Newton task-space training
 
 The Newton task is a separate checkpoint ABI and must be selected explicitly.
-Train the deployable task with the point-SDF preset:
+First run a portable optimizer smoke with the nominal asset:
 
 ```bash
 uv run isaaclab train --rl_library rsl_rl \
   --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-ROS-Inference \
-  --num_envs 256 --seed 123 \
+  --num_envs 16 --max_iterations 1 --seed 123 \
   --visualizer none \
-  presets=newton_sdf
+  physics=newton_sdf
 ```
 
 The recommended fixed profile uses stable Newton 1.6, the MJWarp solver,
@@ -125,16 +125,22 @@ is sampled from +/-10 mm once per episode, and the at-goal reset probability is
 annealed from `0.8` to `0` over the first 500 iterations. Use 256 environments
 per distributed rank; a four-rank job therefore trains 1,024 environments.
 
-The task defaults to the nominal Rizon 4s USD. For a policy intended for a
-specific robot, provide its calibrated USD as an absolute Hydra override:
+The nominal USD is suitable for scene and optimizer smoke tests only. For
+production policy training, provide a validated calibrated USD for the target
+robot as an absolute Hydra override:
 
 ```bash
 uv run isaaclab train --rl_library rsl_rl \
   --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-ROS-Inference \
   --num_envs 256 --visualizer none \
-  presets=newton_sdf \
+  physics=newton_sdf \
   env.scene.robot.spawn.usd_path=/absolute/path/to/calibrated_rizon4s.usd
 ```
+
+The calibrated USD must author valid mass and inertia properties, including for
+`/flange`. If Newton reports an invalid-inertia fallback, fix the asset and
+requalify it before training; the fallback changes the mass matrix used by fully
+decoupled OSC.
 
 Evaluate a checkpoint with the matching Newton play task:
 
@@ -143,11 +149,11 @@ uv run isaaclab play --rl_library rsl_rl \
   --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-Play \
   --num_envs 1 --checkpoint /absolute/path/to/model.pt \
   --visualizer kit \
-  presets=newton_sdf
+  physics=newton_sdf
 ```
 
 `--visualizer none` and `--visualizer kit` control rendering only. The task and
-`presets=newton_sdf` select Newton physics; a visualizer value never selects a
+`physics=newton_sdf` selects Newton physics; a visualizer value never selects a
 physics backend.
 
 > **Checkpoint compatibility:** the Newton actor consumes socket position first
@@ -174,7 +180,7 @@ uv run --group leapp isaaclab-training-export \
   --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-ROS-Inference \
   --checkpoint logs/rsl_rl/displayport_insertion_rizon4s_newton_osc/<run>/model_<n>.pt \
   --contract displayport_task_space \
-  presets=newton_sdf
+  physics=newton_sdf
 ```
 
 The exporter uses packaged Isaac Lab APIs for app launch, Hydra task resolution, RSL-RL checkpoint loading, LEAPP environment patching, and graph compilation. It does not import Isaac Lab source-tree `scripts/` files.

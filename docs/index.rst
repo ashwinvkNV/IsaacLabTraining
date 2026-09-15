@@ -29,8 +29,8 @@ Run a small visual training smoke test:
 
    uv run isaaclab train --rl_library rsl_rl \
      --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference \
-     --num_envs 4 \
-     --max_iterations 100 \
+     --num_envs 16 \
+     --max_iterations 1 \
      --visualizer kit
 
 See :doc:`setup_training` for the complete install, source-checkout, and
@@ -52,6 +52,9 @@ Flexiv Rizon 4s arm with a Grav parallel gripper.
    * - DisplayPort task-space insertion
      - ``IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference``
      - Recommended for real-robot deployment.
+   * - DisplayPort task-space insertion with Newton
+     - ``IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-ROS-Inference``
+     - Recommended Newton 1.6 MJWarp profile for calibrated-robot training.
    * - DisplayPort joint-space insertion
      - ``IsaacTraining-DisplayPortInsertion-Rizon4s-Joint-NoJointVel-ROS-Inference``
      - Deployable joint-position policy without joint velocity in actor observations.

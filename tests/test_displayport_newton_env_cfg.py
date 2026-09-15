@@ -186,6 +186,68 @@ def test_displayport_grasp_reset_holds_randomized_target_during_ik(monkeypatch: 
         torch.testing.assert_close(target, ik_targets[0])
 
 
+def test_displayport_grasp_reset_supports_legacy_four_argument_gripper_callback():
+    """Legacy gripper callbacks remain usable while receiving one deprecation warning."""
+    calls = []
+
+    def legacy_callback(joint_pos, reset_indices, finger_joints, finger_joint_position):
+        calls.append((joint_pos, reset_indices, finger_joints, finger_joint_position))
+
+    term = object.__new__(set_robot_to_object_grasp_pose)
+    term.gripper_joint_setter_func = legacy_callback
+    term._gripper_joint_setter_mode = None
+    term.joint_name_to_idx = {"finger_joint": 7}
+    joint_pos = torch.zeros(1, 8)
+
+    with pytest.warns(DeprecationWarning, match="Four-argument gripper_joint_setter_func") as warnings_record:
+        term._set_gripper_joint_position(joint_pos, [0], [7], -0.1)
+        term._set_gripper_joint_position(joint_pos, [0], [7], -0.2)
+
+    assert len(warnings_record) == 1
+    assert len(calls) == 2
+    assert calls[0][0] is joint_pos
+    assert calls[1][0] is joint_pos
+    assert [call[1:] for call in calls] == [([0], [7], -0.1), ([0], [7], -0.2)]
+
+
+def test_displayport_grasp_reset_passes_joint_name_mapping_to_updated_gripper_callback():
+    """Updated gripper callbacks receive the backend-independent joint-name mapping."""
+    received_mappings = []
+
+    def mapped_callback(
+        _joint_pos,
+        _reset_indices,
+        _finger_joints,
+        _finger_joint_position,
+        *,
+        joint_name_to_idx,
+    ):
+        received_mappings.append(joint_name_to_idx)
+
+    term = object.__new__(set_robot_to_object_grasp_pose)
+    term.gripper_joint_setter_func = mapped_callback
+    term._gripper_joint_setter_mode = None
+    term.joint_name_to_idx = {"finger_joint": 7}
+
+    term._set_gripper_joint_position(torch.zeros(1, 8), [0], [7], -0.1)
+
+    assert received_mappings == [term.joint_name_to_idx]
+
+
+def test_displayport_grav_reset_preserves_legacy_positional_joint_order():
+    """Direct four-argument calls retain the original positional mimic behavior."""
+    finger_joints = [8, 2, 5, 1, 9, 4]
+    joint_pos = torch.full((2, 10), 42.0)
+
+    with pytest.warns(DeprecationWarning, match="without joint_name_to_idx"):
+        set_finger_joint_pos_grav(joint_pos, [0], finger_joints, -0.1)
+
+    expected = {8: -0.1, 2: -0.1, 5: -0.1, 1: -0.1, 9: 0.1, 4: 0.1}
+    for joint_idx, value in expected.items():
+        assert joint_pos[0, joint_idx] == pytest.approx(value)
+    torch.testing.assert_close(joint_pos[1], torch.full((10,), 42.0))
+
+
 def test_displayport_grav_reset_sets_mimic_joints_by_name():
     """The reset must preserve Grav mimic signs when Newton reorders the joints."""
     joint_names = [

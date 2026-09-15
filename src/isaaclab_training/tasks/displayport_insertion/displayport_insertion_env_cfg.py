@@ -15,6 +15,8 @@ from dataclasses import MISSING
 
 import torch
 from isaaclab_physx.physics import PhysxCfg
+from isaaclab_physx.sim.schemas import PhysxCollisionPropertiesCfg, PhysxRigidBodyPropertiesCfg
+from isaaclab_physx.sim.spawners.materials import PhysxRigidBodyMaterialCfg
 
 import isaaclab.sim as sim_utils
 import isaaclab.utils.math as math_utils
@@ -31,6 +33,7 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim.simulation_cfg import SimulationCfg
 from isaaclab.utils.configclass import configclass
 from isaaclab.utils.noise import UniformNoiseCfg
+from isaaclab_visualizers.kit import KitVisualizerCfg
 
 import isaaclab_training.mdp as mdp
 from isaaclab_training.mdp.noise_models import ResetSampledConstantNoiseModelCfg
@@ -131,7 +134,7 @@ class DisplayPortPlug(RigidObjectCfg):
         usd_path=f"{DISPLAY_ASSETS_DIR}/displayport_plug.usd",
         scale=(1.0, 1.0, 1.0),
         activate_contact_sensors=True,
-        rigid_props=sim_utils.RigidBodyPropertiesCfg(
+        rigid_props=PhysxRigidBodyPropertiesCfg(
             disable_gravity=False,
             kinematic_enabled=False,
             max_depenetration_velocity=0.5,
@@ -145,7 +148,7 @@ class DisplayPortPlug(RigidObjectCfg):
             max_contact_impulse=None,
         ),
         mass_props=sim_utils.MassPropertiesCfg(mass=0.03),
-        collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.00001, rest_offset=-0.00005),
+        collision_props=PhysxCollisionPropertiesCfg(contact_offset=0.00001, rest_offset=-0.00005),
     )
     init_state = RigidObjectCfg.InitialStateCfg(pos=_PLUG_ROOT_POS, rot=_DEFAULT_PLUG_ROT)
 
@@ -159,7 +162,7 @@ class DisplayPortSocket(RigidObjectCfg):
         usd_path=f"{DISPLAY_ASSETS_DIR}/displayport_socket_no_protrusions.usd",
         scale=(1.0, 1.0, 1.0),
         activate_contact_sensors=False,
-        rigid_props=sim_utils.RigidBodyPropertiesCfg(
+        rigid_props=PhysxRigidBodyPropertiesCfg(
             disable_gravity=False,
             kinematic_enabled=True,
             max_depenetration_velocity=5.0,
@@ -173,7 +176,7 @@ class DisplayPortSocket(RigidObjectCfg):
             max_contact_impulse=1e32,
         ),
         mass_props=sim_utils.MassPropertiesCfg(mass=None),
-        collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.0001, rest_offset=-0.0001),
+        collision_props=PhysxCollisionPropertiesCfg(contact_offset=0.0001, rest_offset=-0.0001),
     )
     init_state = RigidObjectCfg.InitialStateCfg(pos=_SOCKET_ROOT_POS, rot=_DEFAULT_SOCKET_ROT)
 
@@ -337,7 +340,7 @@ class DisplayportInsertionEnvCfg(ManagerBasedRLEnvCfg):
     success_plug_offset: list = MISSING
     success_plug_goal_rot_inv: list = MISSING
     sim: SimulationCfg = SimulationCfg(
-        physics_material=sim_utils.RigidBodyMaterialCfg(
+        physics_material=PhysxRigidBodyMaterialCfg(
             friction_combine_mode="multiply",
             restitution_combine_mode="multiply",
             static_friction=1.0,
@@ -357,8 +360,10 @@ class DisplayportInsertionEnvCfg(ManagerBasedRLEnvCfg):
     def __post_init__(self):
         """Post initialization."""
         self.episode_length_s = 6.66
-        self.viewer.eye = (0.5, -1.8, 1.2)
-        self.viewer.lookat = (0.5, 0.0, 0.5)
+        self.sim.default_visualizer_cfg = KitVisualizerCfg(
+            eye=(0.5, -1.8, 1.2),
+            lookat=(0.5, 0.0, 0.5),
+        )
         self.decimation = 8
         self.sim.render_interval = self.decimation
         self.sim.dt = 1.0 / 240.0

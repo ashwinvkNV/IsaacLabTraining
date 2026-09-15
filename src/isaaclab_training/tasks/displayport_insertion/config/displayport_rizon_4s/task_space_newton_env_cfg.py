@@ -10,10 +10,14 @@ the flange origin in a different tensor order than the PhysX task-space policy.
 """
 
 from isaaclab_newton.physics import MJWarpSolverCfg, NewtonCfg, NewtonCollisionPipelineCfg, NewtonShapeCfg
-from isaaclab_newton.sim.schemas import NewtonCollisionCfg, NewtonSDFCollisionCfg
+from isaaclab_newton.sim.schemas import (
+    MujocoJointDrivePropertiesCfg,
+    MujocoRigidBodyPropertiesCfg,
+    NewtonCollisionCfg,
+    NewtonSDFCollisionCfg,
+)
 from isaaclab_physx.sim.schemas import PhysxCollisionCfg
 
-import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.controllers.operational_space_cfg import OperationalSpaceControllerCfg
 from isaaclab.envs import mdp as env_mdp
@@ -238,8 +242,8 @@ class Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg(Rizon4sTaskSpaceDisplaypo
 
         # Newton cancels robot-body gravity directly. OSC gravity compensation
         # stays disabled to avoid applying gravity twice.
-        self.scene.robot.spawn.rigid_props = sim_utils.MujocoRigidBodyPropertiesCfg(gravcomp=1.0)
-        self.scene.robot.spawn.joint_drive_props = sim_utils.MujocoJointDrivePropertiesCfg(actuatorgravcomp=False)
+        self.scene.robot.spawn.rigid_props = MujocoRigidBodyPropertiesCfg(gravcomp=1.0)
+        self.scene.robot.spawn.joint_drive_props = MujocoJointDrivePropertiesCfg(actuatorgravcomp=False)
 
         self.scene.robot.actuators["gripper_drive"] = ImplicitActuatorCfg(
             joint_names_expr=["finger_joint"],

@@ -90,13 +90,26 @@ IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference
 
 The original `IsaacContrib-Deploy-...` IDs are also registered as compatibility aliases.
 
-Task space is the recommended DisplayPort deployment path:
+Task space is the recommended DisplayPort deployment path. The packaged tasks
+use Isaac Lab's stock nominal Rizon 4s with Grav USD unless
+`env.scene.robot.spawn.usd_path` is explicitly overridden:
 
 ```bash
 uv run isaaclab train --rl_library rsl_rl \
   --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference \
   --num_envs 4096 --max_iterations 1500 --seed 42 \
-  --visualizer newton
+  --visualizer none
+```
+
+To train for a calibrated physical arm, pass its validated USD as an absolute
+Hydra override while leaving the packaged default unchanged:
+
+```bash
+uv run isaaclab train --rl_library rsl_rl \
+  --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference \
+  --num_envs 4096 --max_iterations 1500 --seed 42 \
+  --visualizer none \
+  env.scene.robot.spawn.usd_path=/absolute/path/to/calibrated_rizon4s.usd
 ```
 
 ## Export

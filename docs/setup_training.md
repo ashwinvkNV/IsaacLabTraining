@@ -90,6 +90,15 @@ uv run isaaclab train --rl_library rsl_rl \
 Use this small visual run first to confirm that Isaac Sim launches, the task is
 registered, and the robot/plug/socket scene looks correct.
 
+The packaged DisplayPort tasks use Isaac Lab's stock nominal Rizon 4s with
+Grav USD by default. Keep this default for the portable baseline. To train for
+a particular calibrated arm, append this absolute Hydra override to the same
+command:
+
+```text
+env.scene.robot.spawn.usd_path=/absolute/path/to/calibrated_rizon4s.usd
+```
+
 If this command reports `Isaac Sim is not installed or not found on PYTHONPATH`,
 run `uv sync --group sim` or use the Isaac Lab source-checkout workflow below.
 

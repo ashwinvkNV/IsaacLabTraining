@@ -901,6 +901,14 @@ Launch full training in headless mode with video recording:
               --viz none \
               --video --video_length 200 --video_interval 76800
 
+The full-scale commands above use the stock nominal Rizon 4s USD. To train
+either PhysX control space for a calibrated arm, append its absolute USD
+override and repeat it when playing or exporting that checkpoint:
+
+.. code-block:: text
+
+    env.scene.robot.spawn.usd_path=/absolute/path/to/calibrated_rizon4s.usd
+
 **Multi-GPU (distributed) training** — for example on a cluster / OSMO workflow, launch the packaged Isaac Lab
 trainer under your cluster's distributed wrapper and keep ``--distributed`` in the Isaac Lab arguments:
 

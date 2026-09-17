@@ -861,8 +861,8 @@ recommended fixed profile uses the stable Newton 1.6 release with:
    * - Reset curriculum
      - At-goal probability annealed from ``0.8`` to ``0`` over iterations 0–500
 
-Run a portable one-iteration smoke with the nominal asset so the checkpoint and export contract initializes
-end to end:
+Both the PhysX and Newton configurations inherit Isaac Lab's stock nominal Rizon 4s with Grav USD. Run a portable
+one-iteration smoke with this default asset so the checkpoint and export contract initializes end to end:
 
 .. code-block:: bash
 
@@ -880,9 +880,22 @@ increase and validate ``max_triangle_pairs`` as well. For a visual smoke test, r
 ``--visualizer kit``. Rendering is independent of physics: ``none`` and ``kit`` only select the visualizer, while
 the Newton task id plus ``physics=newton_sdf`` selects the backend and physics profile.
 
-The default task spawns the nominal Rizon 4s USD for portable smoke tests. Production policy training requires
-a corrected and requalified calibrated robot asset. Pass its USD as
-an **absolute** path rather than changing the default:
+Run the complete four-GPU baseline with the same default nominal USD by omitting
+``env.scene.robot.spawn.usd_path``:
+
+.. code-block:: bash
+
+    uv run isaaclab train_multigpu --num_gpus 4 \
+        --rl_library rsl_rl \
+        --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-ROS-Inference \
+        --num_envs 256 \
+        --seed 123 \
+        --visualizer none \
+        physics=newton_sdf
+
+For training that should match a particular physical arm, pass its corrected
+and requalified calibrated USD as an **absolute** path rather than changing the
+packaged default:
 
 .. code-block:: bash
 
@@ -1014,6 +1027,13 @@ Launch full training in headless mode with video recording:
               --num_envs 256 \
               --viz none \
               --video --video_length 200 --video_interval 76800
+
+The full-scale commands above use the nominal Rizon 4s USD. To train either
+PhysX control space for a calibrated arm, append its absolute USD override:
+
+.. code-block:: text
+
+    env.scene.robot.spawn.usd_path=/absolute/path/to/calibrated_rizon4s.usd
 
 **Multi-GPU (distributed) training** — for example on a cluster / OSMO workflow, launch the packaged Isaac Lab
 trainer under your cluster's distributed wrapper and keep ``--distributed`` in the Isaac Lab arguments:

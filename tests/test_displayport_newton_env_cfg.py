@@ -16,6 +16,7 @@ import warp as wp
 from isaaclab.controllers.operational_space_cfg import OperationalSpaceControllerCfg
 from isaaclab.managers import ObservationTermCfg, SceneEntityCfg
 from isaaclab.utils.noise import UniformNoiseCfg
+from isaaclab_assets import FLEXIV_RIZON4S_GRAV_GRIPPER_CFG
 from isaaclab_newton.physics import MJWarpSolverCfg, NewtonCfg
 from isaaclab_newton.sim.schemas import NewtonCollisionCfg, NewtonSDFCollisionCfg
 from isaaclab_physx.physics import PhysxCfg
@@ -710,7 +711,9 @@ def test_displayport_newton_runner_and_play_preserve_physx_defaults():
     assert actor.socket_kp_pos.noise is None
     assert tuple(actor.eef_pos.params["offset"]) == pytest.approx((0.0, 0.0, 0.1925))
     assert physx_cfg.actions.arm_action.controller_cfg.inertial_dynamics_decoupling is False
-    assert physx_cfg.scene.robot.spawn.usd_path == train_cfg.scene.robot.spawn.usd_path
+    nominal_usd_path = FLEXIV_RIZON4S_GRAV_GRIPPER_CFG.spawn.usd_path
+    assert physx_cfg.scene.robot.spawn.usd_path == nominal_usd_path
+    assert train_cfg.scene.robot.spawn.usd_path == nominal_usd_path
     assert physx_cfg.events.plug_physics_material.params["static_friction_range"] == pytest.approx((0.001, 0.001))
     assert physx_cfg.events.robot_physics_material.params["static_friction_range"] == pytest.approx((0.75, 0.75))
 

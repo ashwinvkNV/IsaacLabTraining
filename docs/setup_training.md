@@ -90,6 +90,15 @@ uv run isaaclab train --rl_library rsl_rl \
 Use this small visual run first to confirm that Isaac Sim launches, the task is
 registered, and the robot/plug/socket scene looks correct.
 
+All packaged DisplayPort training tasks use Isaac Lab's stock nominal Rizon 4s
+with Grav USD by default. Keep this default for the portable baseline. To train
+for a particular calibrated arm, append the following absolute Hydra override
+to the same PhysX command:
+
+```text
+env.scene.robot.spawn.usd_path=/absolute/path/to/calibrated_rizon4s.usd
+```
+
 The Newton task is a separate checkpoint ABI. Run a finite headless optimizer smoke with the typed Newton physics
 selection before launching a full job:
 
@@ -119,8 +128,22 @@ uv run isaaclab train --rl_library rsl_rl \
   --video --video_length 200 --video_interval 76800
 ```
 
-For the recommended Newton 1.6 task-space profile, use 256 environments per distributed rank and the calibrated
-USD for the robot that will execute the policy:
+For the recommended Newton 1.6 task-space profile, use 256 environments per
+distributed rank. This command follows the packaged default and trains with the
+nominal Rizon 4s USD:
+
+```bash
+uv run isaaclab train_multigpu --num_gpus 4 \
+  --rl_library rsl_rl \
+  --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-ROS-Inference \
+  --num_envs 256 \
+  --seed 123 \
+  --visualizer none \
+  physics=newton_sdf
+```
+
+To match a particular physical arm, run the same profile with its calibrated
+USD:
 
 ```bash
 uv run isaaclab train --rl_library rsl_rl \

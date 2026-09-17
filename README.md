@@ -93,8 +93,10 @@ IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-ROS-Inference
 
 The original `IsaacContrib-Deploy-...` IDs are also registered as compatibility aliases.
 
-Task space is the recommended DisplayPort deployment path. This command uses
-the existing PhysX task:
+Task space is the recommended DisplayPort deployment path. PhysX and Newton
+both use Isaac Lab's stock nominal Rizon 4s with Grav USD unless
+`env.scene.robot.spawn.usd_path` is explicitly overridden. This command uses
+the nominal robot with the existing PhysX task:
 
 ```bash
 uv run isaaclab train --rl_library rsl_rl \
@@ -103,15 +105,38 @@ uv run isaaclab train --rl_library rsl_rl \
   --visualizer none
 ```
 
+To train for a calibrated physical arm, pass its validated USD as an absolute
+Hydra override while leaving the packaged default unchanged:
+
+```bash
+uv run isaaclab train --rl_library rsl_rl \
+  --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference \
+  --num_envs 4096 --max_iterations 1500 --seed 42 \
+  --visualizer none \
+  env.scene.robot.spawn.usd_path=/absolute/path/to/calibrated_rizon4s.usd
+```
+
 ### Newton task-space training
 
 The Newton task is a separate checkpoint ABI and must be selected explicitly.
-First run a portable optimizer smoke with the nominal asset:
+First run a portable optimizer smoke with the default nominal asset:
 
 ```bash
 uv run isaaclab train --rl_library rsl_rl \
   --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-ROS-Inference \
   --num_envs 16 --max_iterations 1 --seed 123 \
+  --visualizer none \
+  physics=newton_sdf
+```
+
+Full Newton training uses the same nominal asset by default; no robot-USD
+override is required:
+
+```bash
+uv run isaaclab train_multigpu --num_gpus 4 \
+  --rl_library rsl_rl \
+  --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-ROS-Inference \
+  --num_envs 256 --seed 123 \
   --visualizer none \
   physics=newton_sdf
 ```
@@ -125,9 +150,9 @@ is sampled from +/-10 mm once per episode, and the at-goal reset probability is
 annealed from `0.8` to `0` over the first 500 iterations. Use 256 environments
 per distributed rank; a four-rank job therefore trains 1,024 environments.
 
-The nominal USD is suitable for scene and optimizer smoke tests only. For
-production policy training, provide a validated calibrated USD for the target
-robot as an absolute Hydra override:
+The nominal USD provides the portable training baseline. For policy training
+that should match a particular physical arm, provide that arm's validated
+calibrated USD as an absolute Hydra override:
 
 ```bash
 uv run isaaclab train --rl_library rsl_rl \

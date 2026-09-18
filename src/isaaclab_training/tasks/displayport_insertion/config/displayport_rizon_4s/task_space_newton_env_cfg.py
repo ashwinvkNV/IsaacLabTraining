@@ -18,7 +18,7 @@ from isaaclab_newton.sim.schemas import (
 )
 from isaaclab_physx.sim.schemas import PhysxCollisionCfg
 
-from isaaclab.actuators import ImplicitActuatorCfg
+from isaaclab.actuators import IdealPDActuatorCfg, ImplicitActuatorCfg
 from isaaclab.controllers.operational_space_cfg import OperationalSpaceControllerCfg
 from isaaclab.envs import mdp as env_mdp
 from isaaclab.managers import EventTermCfg as EventTerm
@@ -45,6 +45,33 @@ _OSC_STIFFNESS = (300.0, 300.0, 300.0, 30.0, 30.0, 30.0)
 _OSC_DAMPING_RATIO = (1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
 _NEWTON_NUM_ENVS = 256
 _NEWTON_MAX_TRIANGLE_PAIRS = 2**25
+
+
+def _use_explicit_effort_control_arm_actuators(
+    env_cfg: Rizon4sTaskSpaceDisplayportInsertionEnvCfg,
+) -> None:
+    """Use zero-gain explicit arm actuators to clamp OSC joint efforts."""
+    for actuator_name in ("shoulder", "elbow", "wrist"):
+        source_cfg = env_cfg.scene.robot.actuators[actuator_name]
+        actuator_effort_limit = source_cfg.actuator_effort_limit
+        if actuator_effort_limit is None:
+            actuator_effort_limit = source_cfg.joint_effort_limit
+        actuator_velocity_limit = source_cfg.actuator_velocity_limit
+        if actuator_velocity_limit is None:
+            actuator_velocity_limit = source_cfg.joint_velocity_limit
+        env_cfg.scene.robot.actuators[actuator_name] = IdealPDActuatorCfg(
+            joint_names_expr=list(source_cfg.joint_names_expr),
+            actuator_effort_limit=actuator_effort_limit,
+            actuator_velocity_limit=actuator_velocity_limit,
+            joint_effort_limit=source_cfg.joint_effort_limit,
+            joint_velocity_limit=source_cfg.joint_velocity_limit,
+            stiffness=0.0,
+            damping=0.0,
+            armature=source_cfg.armature,
+            friction=source_cfg.friction,
+            dynamic_friction=source_cfg.dynamic_friction,
+            viscous_friction=source_cfg.viscous_friction,
+        )
 
 
 def _newton_sdf_properties(
@@ -244,6 +271,7 @@ class Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg(Rizon4sTaskSpaceDisplaypo
         # stays disabled to avoid applying gravity twice.
         self.scene.robot.spawn.rigid_props = MujocoRigidBodyPropertiesCfg(gravcomp=1.0)
         self.scene.robot.spawn.joint_drive_props = MujocoJointDrivePropertiesCfg(actuatorgravcomp=False)
+        _use_explicit_effort_control_arm_actuators(self)
 
         self.scene.robot.actuators["gripper_drive"] = ImplicitActuatorCfg(
             joint_names_expr=["finger_joint"],

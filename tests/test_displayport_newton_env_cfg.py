@@ -13,6 +13,7 @@ import gymnasium as gym
 import pytest
 import torch
 import warp as wp
+from isaaclab.actuators import IdealPDActuatorCfg, ImplicitActuatorCfg
 from isaaclab.controllers.operational_space_cfg import OperationalSpaceControllerCfg
 from isaaclab.managers import ObservationTermCfg, SceneEntityCfg
 from isaaclab.utils.noise import UniformNoiseCfg
@@ -512,8 +513,18 @@ def test_displayport_newton_osc_abi_robot_and_gravity_settings():
     assert cfg.scene.robot.spawn.rigid_props.gravcomp == pytest.approx(1.0)
     assert cfg.scene.robot.spawn.joint_drive_props.actuatorgravcomp is False
 
-    for actuator_name in ("shoulder", "elbow", "wrist"):
+    expected_limits = {
+        "shoulder": (123.0, 2.094),
+        "elbow": (64.0, 2.443),
+        "wrist": (39.0, 4.887),
+    }
+    for actuator_name, (effort_limit, velocity_limit) in expected_limits.items():
         actuator = cfg.scene.robot.actuators[actuator_name]
+        assert isinstance(actuator, IdealPDActuatorCfg)
+        assert actuator.actuator_effort_limit == pytest.approx(effort_limit)
+        assert actuator.joint_effort_limit == pytest.approx(effort_limit)
+        assert actuator.actuator_velocity_limit == pytest.approx(velocity_limit)
+        assert actuator.joint_velocity_limit == pytest.approx(velocity_limit)
         assert actuator.stiffness == pytest.approx(0.0)
         assert actuator.damping == pytest.approx(0.0)
 
@@ -700,6 +711,8 @@ def test_displayport_newton_runner_and_play_preserve_physx_defaults():
     assert play_cfg.scene.num_envs == 50
 
     physx_cfg = Rizon4sTaskSpaceDisplayportInsertionEnvCfg()
+    for actuator_name in ("shoulder", "elbow", "wrist"):
+        assert isinstance(physx_cfg.scene.robot.actuators[actuator_name], ImplicitActuatorCfg)
     assert physx_cfg.scene.num_envs == 4096
     assert isinstance(physx_cfg.sim.physics, PhysxCfg)
     assert physx_cfg.sim.dt == pytest.approx(1.0 / 240.0)

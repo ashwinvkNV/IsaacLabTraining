@@ -19,7 +19,7 @@ from isaaclab_training.tasks.displayport_insertion.displayport_insertion_env_cfg
     compute_socket_root,
 )
 
-from .task_space_env_cfg import _ACTION_SCALE, Rizon4sTaskSpaceDisplayportInsertionEnvCfg
+from .task_space_env_cfg import _ACTION_SCALE, _TCP_OFFSET, Rizon4sTaskSpaceDisplayportInsertionEnvCfg
 
 # Deployment socket/plug station pose. CALIBRATE: re-measure for the real DisplayPort
 # station (see ros_inference_env_cfg.py for the joint-space equivalent).
@@ -50,6 +50,14 @@ class Rizon4sTaskSpaceDisplayportInsertionROSInferenceEnvCfg(Rizon4sTaskSpaceDis
         # Metadata consumed by Isaac Manipulator for on-robot inference.
         self.obs_order = ["eef_pos", "eef_rot_6d", "socket_kp_pos", "socket_kp_rot_6d"]
         self.policy_action_space = "task"
+        self.task_space_policy_abi = "displayport_physx_tcp_v1"
+        self.task_space_backend = "physx"
+        self.task_space_observation_reference = "tcp"
+        self.task_space_observation_body_name = "flange"
+        self.task_space_observation_body_offset = list(_TCP_OFFSET)
+        self.task_space_action_reference = "robot_root"
+        self.task_space_action_body_name = "flange"
+        self.task_space_action_body_offset = [0.0, 0.0, 0.0]
         self.arm_joint_names = [
             "joint1",
             "joint2",

@@ -44,7 +44,8 @@ CABLE_INSERTION_DIR = os.path.dirname(os.path.abspath(__file__))
 # to the production bucket that ``ISAAC_NUCLEUS_DIR`` resolves to, so the root is pinned here.
 # Switch to ``f"{ISAAC_NUCLEUS_DIR}/Props/Factory/display_port_cable_assets"`` once promoted.
 _DISPLAY_ASSETS_STAGING_ROOT = "https://omniverse-content-staging.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac"
-DISPLAY_ASSETS_DIR = f"{_DISPLAY_ASSETS_STAGING_ROOT}/Props/Factory/display_port_cable_assets"
+_DISPLAY_ASSETS_DEFAULT_DIR = f"{_DISPLAY_ASSETS_STAGING_ROOT}/Props/Factory/display_port_cable_assets"
+DISPLAY_ASSETS_DIR = os.environ.get("ISAACLAB_TRAINING_DISPLAY_ASSETS_DIR", _DISPLAY_ASSETS_DEFAULT_DIR).rstrip("/")
 
 
 # The asset offsets below are plain Python tuples evaluated at import time, while

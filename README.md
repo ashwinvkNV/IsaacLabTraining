@@ -118,6 +118,13 @@ uv run isaaclab train --rl_library rsl_rl \
 
 ### Newton task-space training
 
+The packaged DisplayPort USDs currently resolve from the Isaac staging asset
+server. Release jobs pin and verify their content hashes. Set
+`ISAACLAB_TRAINING_DISPLAY_ASSETS_DIR` to an approved versioned mirror before
+launching if your deployment cannot depend on staging. Newton validates every
+required point-SDF mesh after composition and fails if the asset layout changes.
+
+
 The Newton task is a separate checkpoint ABI and must be selected explicitly.
 First run a portable optimizer smoke with the default nominal asset:
 
@@ -145,7 +152,9 @@ The recommended fixed profile uses stable Newton 1.6, the MJWarp solver,
 point-SDF contacts with a 5 mm gap, a 2 kHz solver rate, a 200 Hz collision
 refresh rate, and a 33.3 Hz policy rate. It uses torque-level OSC with full
 inertial-dynamics decoupling, stiffness `[300, 300, 300, 30, 30, 30]`, damping
-ratio `1`, and translation scales `[0.025, 0.025, 0.010]`. Socket-position noise
+ratio `1`, and translation scales `[0.025, 0.025, 0.010]`. The arm uses
+zero-gain IdealPD actuator groups with Newton-native effort saturation and
+configured solver velocity limits; OSC remains the joint-effort source. Socket-position noise
 is sampled from +/-10 mm once per episode, and the at-goal reset probability is
 annealed from `0.8` to `0` over the first 500 iterations. Use 256 environments
 per distributed rank; a four-rank job therefore trains 1,024 environments.
@@ -162,10 +171,12 @@ uv run isaaclab train --rl_library rsl_rl \
   env.scene.robot.spawn.usd_path=/absolute/path/to/calibrated_rizon4s.usd
 ```
 
-The calibrated USD must author valid mass and inertia properties, including for
-`/flange`. If Newton reports an invalid-inertia fallback, fix the asset and
-requalify it before training; the fallback changes the mass matrix used by fully
-decoupled OSC.
+The task preserves valid calibrated inertia. When the flange is the stock
+mass-only marker with zero inertia, it explicitly authors Newton 1.6's former
+uniform-sphere fallback and a valid principal-axis quaternion before import.
+Missing flange/mass data, invalid principal axes, or missing point-SDF meshes fail before training.
+Requalify materially changed robot assets because fully decoupled OSC consumes
+their mass matrix.
 
 Evaluate a checkpoint with the matching Newton play task:
 

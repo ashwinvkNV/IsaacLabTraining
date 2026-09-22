@@ -128,6 +128,12 @@ uv run isaaclab train --rl_library rsl_rl \
   --video --video_length 200 --video_interval 76800
 ```
 
+DisplayPort assets currently resolve from the Isaac staging server. Release jobs
+verify the expected plug/socket hashes. Set
+`ISAACLAB_TRAINING_DISPLAY_ASSETS_DIR` to an approved versioned mirror when
+available; the Newton task fails at startup if any required point-SDF mesh is
+missing.
+
 For the recommended Newton 1.6 task-space profile, use 256 environments per
 distributed rank. This command follows the packaged default and trains with the
 nominal Rizon 4s USD:
@@ -155,9 +161,10 @@ uv run isaaclab train --rl_library rsl_rl \
   env.scene.robot.spawn.usd_path=/absolute/path/to/calibrated_rizon4s.usd
 ```
 
-Verify that the calibrated USD authors valid mass and inertia properties, including for the flange. Treat any Newton
-invalid-inertia fallback as an asset error to fix and requalify before full training. Repeat the calibrated-USD
-override when playing or exporting this checkpoint. Newton and PhysX task-space
+The task preserves valid calibrated inertia. For the stock mass-only flange marker, it authors the deterministic
+Newton 1.6 sphere fallback explicitly before import; invalid mass or principal axes, missing flange data, or missing point-SDF meshes
+fail before training. Requalify any materially changed calibrated asset. Repeat the calibrated-USD override when
+playing or exporting this checkpoint. Newton and PhysX task-space
 checkpoints are not interchangeable even though both actor inputs contain 18 values.
 
 Joint-space training is also packaged:

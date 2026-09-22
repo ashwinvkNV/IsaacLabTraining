@@ -15,7 +15,11 @@ from isaaclab_training.tasks.displayport_insertion.displayport_insertion_env_cfg
     compute_socket_root,
 )
 
-from .task_space_newton_env_cfg import Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg
+from .task_space_newton_env_cfg import (
+    _OSC_ORIENTATION_SCALE,
+    _OSC_POSITION_SCALE,
+    Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg,
+)
 
 _DEPLOY_GEOMETRY_POS = (0.475, 0.125, 0.06)
 _DEPLOY_SOCKET_ROT = (0.5, 0.5, 0.5, -0.5)
@@ -40,9 +44,18 @@ class Rizon4sTaskSpaceNewtonDisplayportInsertionROSInferenceEnvCfg(Rizon4sTaskSp
         # expose only the canonical Isaac ROS Deploy port names here.
         self.obs_order = ["eef_pos", "eef_rot_6d", "socket_kp_pos", "socket_kp_rot_6d"]
         self.policy_action_space = "task"
+        self.task_space_policy_abi = "displayport_newton_flange_v1"
+        self.task_space_backend = "newton_mjwarp"
+        self.task_space_observation_reference = "flange"
+        self.task_space_observation_body_name = "flange"
+        self.task_space_observation_body_offset = [0.0, 0.0, 0.0]
+        self.task_space_action_reference = "robot_root"
+        self.task_space_action_body_name = "flange"
+        self.task_space_action_body_offset = [0.0, 0.0, 0.0]
         self.arm_joint_names = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7"]
         self.action_space = 6
         self.observation_space = 18
+        self.action_scale = [*_OSC_POSITION_SCALE, *([_OSC_ORIENTATION_SCALE] * 3)]
         # The critic observes 13 robot joints and their velocities plus true
         # socket and plug position/quaternion pairs.
         self.state_space = 40

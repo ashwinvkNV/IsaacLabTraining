@@ -37,7 +37,13 @@ from isaaclab_training.mdp.events import (
 from isaaclab_training.mdp.noise_models import ResetSampledConstantNoiseModelCfg
 from isaaclab_training.mdp.observations import eef_pos_w, rigid_object_pos_w
 from isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s import (
+    task_space_newton_env_cfg as newton_cfg,
+)
+from isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s import (
     task_space_newton_ros_inference_env_cfg as newton_ros_cfg,
+)
+from isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s import (
+    task_space_ros_inference_env_cfg as physx_ros_cfg,
 )
 from isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s.agents.rsl_rl_ppo_cfg import (
     Rizon4sGravDisplayportInsertionNewtonRNNPPORunnerCfg,
@@ -53,6 +59,13 @@ from isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s.t
     DisplayportNewtonPhysicsCfg,
     Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg,
     Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg_PLAY,
+    _is_valid_diagonal_inertia,
+    _is_valid_principal_axes,
+    _spawn_plug_with_validated_sdf_meshes,
+    _spawn_rizon_with_validated_flange_inertia,
+    _spawn_socket_with_validated_sdf_meshes,
+    _uniform_sphere_inertia,
+    _use_explicit_effort_control_arm_actuators,
 )
 from isaaclab_training.tasks.displayport_insertion.displayport_insertion_env_cfg import (
     PLUG_GOAL_ROT,
@@ -341,6 +354,117 @@ def test_zero_eef_offset_skips_orientation_lookup():
     torch.testing.assert_close(observed, torch.tensor([[0.5, 1.5, 2.5], [3.0, 4.0, 5.0]]))
 
 
+@pytest.mark.parametrize(
+    ("diagonal", "expected"),
+    [
+        pytest.param((1.0, 1.0, 1.0), True, id="valid"),
+        pytest.param((1.0, 1.0, 3.0), False, id="triangle-inequality"),
+        pytest.param((0.0, 0.0, 0.0), False, id="zero"),
+        pytest.param((float("nan"), 1.0, 1.0), False, id="non-finite"),
+        pytest.param(None, False, id="missing"),
+    ],
+)
+def test_newton_flange_inertia_validation(diagonal, expected):
+    """Newton must accept only finite, positive, physically realizable inertia."""
+    assert _is_valid_diagonal_inertia(diagonal) is expected
+
+
+@pytest.mark.parametrize(
+    ("quaternion", "expected"),
+    [
+        pytest.param((1.0, 0.0, 0.0, 0.0), True, id="identity"),
+        pytest.param((0.5, 0.5, 0.5, 0.5), True, id="normalized"),
+        pytest.param((0.0, 0.0, 0.0, 0.0), False, id="zero"),
+        pytest.param((2.0, 0.0, 0.0, 0.0), False, id="not-normalized"),
+        pytest.param((float("nan"), 0.0, 0.0, 0.0), False, id="non-finite"),
+        pytest.param(None, False, id="missing"),
+    ],
+)
+def test_newton_flange_principal_axes_validation(quaternion, expected):
+    """Newton must reject missing, non-finite, or non-normalized principal axes."""
+    assert _is_valid_principal_axes(quaternion) is expected
+
+
+def test_newton_flange_inertia_matches_documented_fallback():
+    """The authored nominal inertia must reproduce Newton's former deterministic fallback."""
+    assert _uniform_sphere_inertia(1.0e-4) == pytest.approx((3.3164051824e-10,) * 3)
+    with pytest.raises(ValueError, match="positive and finite"):
+        _uniform_sphere_inertia(0.0)
+
+
+def test_newton_flange_inertia_is_authored_before_multi_env_clone(monkeypatch: pytest.MonkeyPatch):
+    """The deterministic flange inertia must be copied to every matching environment."""
+    from isaaclab.sim.utils import prims as prim_utils
+    from isaaclab.sim.utils import queries as query_utils
+    from pxr import Gf, Usd, UsdGeom, UsdPhysics
+
+    stage = Usd.Stage.CreateInMemory()
+    for env_index in range(2):
+        UsdGeom.Xform.Define(stage, f"/World/envs/env_{env_index}")
+
+    monkeypatch.setattr(prim_utils, "get_current_stage", lambda: stage)
+    monkeypatch.setattr(query_utils, "get_current_stage", lambda: stage)
+
+    def spawn_zero_inertia_robot(prim_path, _cfg, *_args, **_kwargs):
+        robot = UsdGeom.Xform.Define(stage, prim_path).GetPrim()
+        flange = UsdGeom.Xform.Define(stage, f"{prim_path}/flange").GetPrim()
+        mass_api = UsdPhysics.MassAPI.Apply(flange)
+        mass_api.CreateMassAttr(1.0e-4)
+        mass_api.CreateDiagonalInertiaAttr(Gf.Vec3f(0.0, 0.0, 0.0))
+        mass_api.CreatePrincipalAxesAttr(Gf.Quatf(0.0, 0.0, 0.0, 0.0))
+        return robot
+
+    monkeypatch.setattr(newton_cfg, "spawn_from_usd", spawn_zero_inertia_robot)
+
+    spawned = _spawn_rizon_with_validated_flange_inertia(
+        "/World/envs/env_.*/Robot",
+        SimpleNamespace(usd_path="test_rizon.usd"),
+    )
+
+    assert str(spawned.GetPath()) == "/World/envs/env_0/Robot"
+    expected = _uniform_sphere_inertia(1.0e-4)
+    for env_index in range(2):
+        flange = stage.GetPrimAtPath(f"/World/envs/env_{env_index}/Robot/flange")
+        mass_api = UsdPhysics.MassAPI(flange)
+        assert tuple(mass_api.GetDiagonalInertiaAttr().Get()) == pytest.approx(expected)
+        principal_axes = mass_api.GetPrincipalAxesAttr().Get()
+        assert principal_axes.GetReal() == pytest.approx(1.0)
+        assert tuple(principal_axes.GetImaginary()) == pytest.approx((0.0, 0.0, 0.0))
+
+
+def test_newton_flange_rejects_valid_inertia_with_invalid_principal_axes(monkeypatch: pytest.MonkeyPatch):
+    """A calibrated asset must not preserve an invalid principal-axis quaternion."""
+    from pxr import Gf, Usd, UsdGeom, UsdPhysics
+
+    stage = Usd.Stage.CreateInMemory()
+
+    def spawn_invalid_axes_robot(prim_path, _cfg, *_args, **_kwargs):
+        robot = UsdGeom.Xform.Define(stage, prim_path).GetPrim()
+        flange = UsdGeom.Xform.Define(stage, f"{prim_path}/flange").GetPrim()
+        mass_api = UsdPhysics.MassAPI.Apply(flange)
+        mass_api.CreateMassAttr(1.0)
+        mass_api.CreateDiagonalInertiaAttr(Gf.Vec3f(1.0, 1.0, 1.0))
+        mass_api.CreatePrincipalAxesAttr(Gf.Quatf(0.0, 0.0, 0.0, 0.0))
+        return robot
+
+    monkeypatch.setattr(newton_cfg, "spawn_from_usd", spawn_invalid_axes_robot)
+
+    with pytest.raises(ValueError, match="normalized principal axes"):
+        _spawn_rizon_with_validated_flange_inertia.__wrapped__(
+            "/World/Robot",
+            SimpleNamespace(usd_path="invalid_axes.usd"),
+        )
+
+
+def test_newton_ideal_pd_rejects_missing_limits():
+    """A future robot asset must not silently create an unbounded OSC actuator."""
+    cfg = Rizon4sTaskSpaceDisplayportInsertionEnvCfg()
+    cfg.scene.robot.actuators["shoulder"].actuator_effort_limit = None
+    cfg.scene.robot.actuators["shoulder"].joint_effort_limit = None
+    with pytest.raises(ValueError, match="must define effort limits"):
+        _use_explicit_effort_control_arm_actuators(cfg)
+
+
 def test_displayport_newton_tasks_route_to_dedicated_configs():
     """Newton registrations must not replace or redirect existing PhysX tasks."""
     expected = {
@@ -587,13 +711,36 @@ def test_displayport_newton_observation_abi_noise_and_deployment_metadata():
     ros_cfg = newton_ros_cfg.Rizon4sTaskSpaceNewtonDisplayportInsertionROSInferenceEnvCfg()
     assert ros_cfg.obs_order == ["eef_pos", "eef_rot_6d", "socket_kp_pos", "socket_kp_rot_6d"]
     assert ros_cfg.policy_action_space == "task"
+    assert ros_cfg.task_space_policy_abi == "displayport_newton_flange_v1"
+    assert ros_cfg.task_space_backend == "newton_mjwarp"
+    assert ros_cfg.task_space_observation_reference == "flange"
+    assert ros_cfg.task_space_observation_body_name == "flange"
+    assert ros_cfg.task_space_observation_body_offset == pytest.approx([0.0, 0.0, 0.0])
+    assert ros_cfg.task_space_action_reference == "robot_root"
+    assert ros_cfg.task_space_action_body_name == "flange"
+    assert ros_cfg.task_space_action_body_offset == pytest.approx([0.0, 0.0, 0.0])
     assert ros_cfg.arm_joint_names == _ARM_JOINTS
     assert ros_cfg.action_space == 6
+    assert ros_cfg.action_scale == pytest.approx([0.025, 0.025, 0.010, 0.025, 0.025, 0.025])
     assert ros_cfg.observation_space == 18
     assert ros_cfg.state_space == 40
     assert ros_cfg.fixed_asset_init_pos_range == pytest.approx([0.01, 0.01, 0.02])
     assert ros_cfg.fixed_asset_init_orn_deg_range == pytest.approx([2.0, 2.0, 2.0])
     assert ros_cfg.fixed_asset_pos_obs_noise_level == pytest.approx([0.01, 0.01, 0.01])
+
+
+def test_physx_task_space_deployment_frame_metadata_remains_explicit():
+    """PhysX and Newton bundles must expose distinguishable observation frames."""
+    cfg = physx_ros_cfg.Rizon4sTaskSpaceDisplayportInsertionROSInferenceEnvCfg()
+    assert cfg.task_space_policy_abi == "displayport_physx_tcp_v1"
+    assert cfg.task_space_backend == "physx"
+    assert cfg.task_space_observation_reference == "tcp"
+    assert cfg.task_space_observation_body_name == "flange"
+    assert cfg.task_space_observation_body_offset == pytest.approx([0.0, 0.0, 0.1925])
+    assert cfg.task_space_action_reference == "robot_root"
+    assert cfg.task_space_action_body_name == "flange"
+    assert cfg.task_space_action_body_offset == pytest.approx([0.0, 0.0, 0.0])
+    assert cfg.action_scale == pytest.approx([0.025] * 6)
 
 
 def test_displayport_newton_domain_randomization_curriculum_and_rewards():
@@ -699,6 +846,10 @@ def test_displayport_newton_runner_and_play_preserve_physx_defaults():
     train_cfg = Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg()
     play_cfg = Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg_PLAY()
     assert train_cfg.scene.num_envs == 256
+    assert train_cfg.sim.use_newton_actuators is True
+    assert train_cfg.scene.robot.spawn.func is _spawn_rizon_with_validated_flange_inertia
+    assert train_cfg.scene.dp_plug.spawn.func is _spawn_plug_with_validated_sdf_meshes
+    assert train_cfg.scene.dp_socket.spawn.func is _spawn_socket_with_validated_sdf_meshes
     assert train_cfg.observations.policy.enable_corruption is True
     assert train_cfg.events.reset_plug_curriculum.params["at_goal_prob"] == pytest.approx(0.8)
     assert play_cfg.observations.policy.enable_corruption is False

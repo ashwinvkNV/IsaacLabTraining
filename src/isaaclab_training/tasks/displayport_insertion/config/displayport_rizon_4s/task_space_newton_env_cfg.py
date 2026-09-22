@@ -9,6 +9,9 @@ It is separate from :mod:`task_space_env_cfg` because its checkpoint ABI observe
 the flange origin in a different tensor order than the PhysX task-space policy.
 """
 
+import logging
+import math
+
 from isaaclab_newton.physics import MJWarpSolverCfg, NewtonCfg, NewtonCollisionPipelineCfg, NewtonShapeCfg
 from isaaclab_newton.sim.schemas import (
     MujocoJointDrivePropertiesCfg,
@@ -25,6 +28,8 @@ from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import SceneEntityCfg
+from isaaclab.sim.spawners.from_files import spawn_from_usd
+from isaaclab.sim.utils import clone
 from isaaclab.utils.configclass import configclass
 from isaaclab.utils.noise import UniformNoiseCfg
 
@@ -45,6 +50,9 @@ _OSC_STIFFNESS = (300.0, 300.0, 300.0, 30.0, 30.0, 30.0)
 _OSC_DAMPING_RATIO = (1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
 _NEWTON_NUM_ENVS = 256
 _NEWTON_MAX_TRIANGLE_PAIRS = 2**25
+_FLANGE_FALLBACK_DENSITY = 1000.0
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _use_explicit_effort_control_arm_actuators(
@@ -59,6 +67,10 @@ def _use_explicit_effort_control_arm_actuators(
         actuator_velocity_limit = source_cfg.actuator_velocity_limit
         if actuator_velocity_limit is None:
             actuator_velocity_limit = source_cfg.joint_velocity_limit
+        if actuator_effort_limit is None or source_cfg.joint_effort_limit is None:
+            raise ValueError(f"Newton OSC arm actuator {actuator_name!r} must define effort limits.")
+        if actuator_velocity_limit is None or source_cfg.joint_velocity_limit is None:
+            raise ValueError(f"Newton OSC arm actuator {actuator_name!r} must define velocity limits.")
         env_cfg.scene.robot.actuators[actuator_name] = IdealPDActuatorCfg(
             joint_names_expr=list(source_cfg.joint_names_expr),
             actuator_effort_limit=actuator_effort_limit,
@@ -72,6 +84,108 @@ def _use_explicit_effort_control_arm_actuators(
             dynamic_friction=source_cfg.dynamic_friction,
             viscous_friction=source_cfg.viscous_friction,
         )
+
+
+def _uniform_sphere_inertia(mass: float, density: float = _FLANGE_FALLBACK_DENSITY) -> tuple[float, float, float]:
+    """Return the diagonal inertia for a uniform sphere with the given mass."""
+    if not math.isfinite(mass) or mass <= 0.0:
+        raise ValueError(f"Flange mass must be positive and finite, got {mass!r}.")
+    if not math.isfinite(density) or density <= 0.0:
+        raise ValueError(f"Fallback density must be positive and finite, got {density!r}.")
+    radius = (3.0 * mass / (4.0 * math.pi * density)) ** (1.0 / 3.0)
+    moment = 0.4 * mass * radius**2
+    return (moment, moment, moment)
+
+
+def _is_valid_diagonal_inertia(diagonal: object) -> bool:
+    """Return whether a diagonal inertia is finite, positive, and physically realizable."""
+    if diagonal is None:
+        return False
+    values = tuple(float(value) for value in diagonal)
+    if len(values) != 3 or not all(math.isfinite(value) and value > 0.0 for value in values):
+        return False
+    return all(values[index] <= values[(index + 1) % 3] + values[(index + 2) % 3] for index in range(3))
+
+
+def _is_valid_principal_axes(quaternion: object) -> bool:
+    """Return whether a principal-axis quaternion is finite and normalized."""
+    if quaternion is None:
+        return False
+    if hasattr(quaternion, "GetReal") and hasattr(quaternion, "GetImaginary"):
+        values = (float(quaternion.GetReal()), *(float(value) for value in quaternion.GetImaginary()))
+    else:
+        values = tuple(float(value) for value in quaternion)
+    if len(values) != 4 or not all(math.isfinite(value) for value in values):
+        return False
+    return math.isclose(sum(value * value for value in values), 1.0, rel_tol=1.0e-5, abs_tol=1.0e-5)
+
+
+@clone
+def _spawn_rizon_with_validated_flange_inertia(
+    prim_path: str,
+    cfg,
+    translation: tuple[float, float, float] | None = None,
+    orientation: tuple[float, float, float, float] | None = None,
+    **kwargs,
+):
+    """Spawn Rizon and author the deterministic Newton fallback inertia when needed."""
+    prim = spawn_from_usd(prim_path, cfg, translation, orientation, **kwargs)
+
+    from pxr import Gf, UsdPhysics
+
+    flange = prim.GetStage().GetPrimAtPath(prim.GetPath().AppendChild("flange"))
+    if not flange.IsValid():
+        raise ValueError(f"Rizon USD {cfg.usd_path!r} does not contain the required flange prim.")
+    mass_api = UsdPhysics.MassAPI(flange)
+    if not mass_api:
+        raise ValueError(f"Rizon flange {flange.GetPath()} must have UsdPhysics.MassAPI.")
+
+    diagonal = mass_api.GetDiagonalInertiaAttr().Get()
+    principal_axes = mass_api.GetPrincipalAxesAttr().Get()
+    if _is_valid_diagonal_inertia(diagonal):
+        if not _is_valid_principal_axes(principal_axes):
+            raise ValueError(f"Rizon flange {flange.GetPath()} must have normalized principal axes.")
+        return prim
+
+    mass = mass_api.GetMassAttr().Get()
+    diagonal = _uniform_sphere_inertia(float(mass) if mass is not None else float("nan"))
+    mass_api.GetDiagonalInertiaAttr().Set(Gf.Vec3f(*diagonal))
+    mass_api.GetPrincipalAxesAttr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
+    _LOGGER.info("Authored deterministic flange inertia %s kg*m^2 for Newton asset %s.", diagonal, cfg.usd_path)
+    return prim
+
+
+def _validate_sdf_meshes(root_prim, relative_paths: tuple[str, ...]) -> None:
+    """Fail when a release asset no longer contains an expected colliding SDF mesh."""
+    from pxr import UsdGeom, UsdPhysics
+
+    missing = []
+    for relative_path in relative_paths:
+        mesh_path = f"{root_prim.GetPath()}{relative_path}"
+        mesh_prim = root_prim.GetStage().GetPrimAtPath(mesh_path)
+        if not mesh_prim.IsValid() or not mesh_prim.IsA(UsdGeom.Mesh) or not UsdPhysics.CollisionAPI(mesh_prim):
+            missing.append(mesh_path)
+    if missing:
+        raise ValueError(f"DisplayPort asset is missing required colliding SDF meshes: {missing!r}.")
+
+
+@clone
+def _spawn_plug_with_validated_sdf_meshes(prim_path: str, cfg, translation=None, orientation=None, **kwargs):
+    """Spawn the plug and validate the point-SDF mesh contract."""
+    prim = spawn_from_usd(prim_path, cfg, translation, orientation, **kwargs)
+    _validate_sdf_meshes(prim, ("/collision_mesh",))
+    return prim
+
+
+@clone
+def _spawn_socket_with_validated_sdf_meshes(prim_path: str, cfg, translation=None, orientation=None, **kwargs):
+    """Spawn the socket and validate the point-SDF mesh contract."""
+    prim = spawn_from_usd(prim_path, cfg, translation, orientation, **kwargs)
+    _validate_sdf_meshes(
+        prim,
+        tuple(f"/tn__2584N111_DisplayportCord_jP/Body{body_id}/Mesh" for body_id in (5, 6, 8, 12, 13)),
+    )
+    return prim
 
 
 def _newton_sdf_properties(
@@ -210,6 +324,9 @@ class Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg(Rizon4sTaskSpaceDisplaypo
         # 200 Hz, and 33.3 Hz respectively.
         self.sim.dt = 0.01
         self.sim.physics = DisplayportNewtonPhysicsCfg()
+        # Use Newton-native actuator execution. Zero joint gains preserve direct
+        # OSC effort control while effort saturation and solver limits remain active.
+        self.sim.use_newton_actuators = True
         # The collision candidate-pair capacity is scene-wide and supports this
         # per-rank default. Scale the capacity when increasing this value.
         self.scene.num_envs = _NEWTON_NUM_ENVS
@@ -217,8 +334,10 @@ class Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg(Rizon4sTaskSpaceDisplaypo
         self.sim.render_interval = self.decimation
 
         # Preserve source PhysX offsets on every collider, but apply Newton's
-        # point-SDF schema only to meshes authored for SDF collision. Applying
-        # it to convex-decomposition meshes is rejected by Newton 1.5.
+        # point-SDF schema only to meshes authored for SDF collision.
+        self.scene.robot.spawn.func = _spawn_rizon_with_validated_flange_inertia
+        self.scene.dp_plug.spawn.func = _spawn_plug_with_validated_sdf_meshes
+        self.scene.dp_socket.spawn.func = _spawn_socket_with_validated_sdf_meshes
         self.scene.dp_plug.spawn.collision_props = _newton_sdf_properties(
             0.00001,
             -0.00005,

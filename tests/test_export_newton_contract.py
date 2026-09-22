@@ -74,15 +74,20 @@ def test_task_space_input_terms_map_newton_aliases_to_canonical_ports():
 def test_task_space_inputs_are_annotated_eef_first_and_rebuilt_in_newton_actor_order(monkeypatch):
     """Test public input order does not alter the vector consumed by a Newton checkpoint."""
     export_module = _load_export_module()
-    resolved = export_module.resolve_task_space_input_spec(
-        SimpleNamespace(task_space_obs_order=["socket_pos", "tool_pos", "tool_rot_6d", "socket_rot_6d"])
+    env_cfg = SimpleNamespace(
+        task_space_obs_order=["socket_pos", "tool_pos", "tool_rot_6d", "socket_rot_6d"],
+        **_newton_deploy_metadata(),
     )
+    resolved = export_module.resolve_task_space_input_spec(env_cfg)
+    input_metadata, _ = export_module.resolve_task_space_deploy_metadata(env_cfg)
     annotation_order = []
     annotated_values = {}
+    annotated_extras = {}
 
     def _annotate_input(_graph_name, semantics):
         annotation_order.append(semantics.name)
         annotated_values[semantics.name] = semantics.ref.clone()
+        annotated_extras[semantics.name] = semantics.extra
         return semantics.ref
 
     leapp_module = ModuleType("leapp")
@@ -98,7 +103,7 @@ def test_task_space_inputs_are_annotated_eef_first_and_rebuilt_in_newton_actor_o
     trained_actor_obs = torch.arange(18, dtype=torch.float32).reshape(1, 18)
 
     rebuilt = export_module.split_and_annotate_task_space_obs(
-        "DisplayPortTaskSpace", trained_actor_obs, input_spec=resolved
+        "DisplayPortTaskSpace", trained_actor_obs, input_spec=resolved, input_metadata=input_metadata
     )
 
     assert annotation_order == ["eef_pos", "eef_rot_6d", "socket_kp_pos", "socket_kp_rot_6d"]
@@ -106,7 +111,143 @@ def test_task_space_inputs_are_annotated_eef_first_and_rebuilt_in_newton_actor_o
     torch.testing.assert_close(annotated_values["eef_rot_6d"], trained_actor_obs[:, 6:12])
     torch.testing.assert_close(annotated_values["socket_kp_pos"], trained_actor_obs[:, 0:3])
     torch.testing.assert_close(annotated_values["socket_kp_rot_6d"], trained_actor_obs[:, 12:18])
+    assert annotated_extras["eef_pos"]["policy_abi"] == "displayport_newton_flange_v1"
+    assert annotated_extras["eef_pos"]["pose_reference"] == "flange"
+    assert annotated_extras["eef_pos"]["body_offset"] == pytest.approx([0.0, 0.0, 0.0])
+    assert "pose_reference" not in annotated_extras["socket_kp_pos"]
     torch.testing.assert_close(rebuilt, trained_actor_obs)
+
+
+def _newton_deploy_metadata():
+    return {
+        "task_space_policy_abi": "displayport_newton_flange_v1",
+        "task_space_backend": "newton_mjwarp",
+        "task_space_observation_reference": "flange",
+        "task_space_observation_body_name": "flange",
+        "task_space_observation_body_offset": [0.0, 0.0, 0.0],
+        "task_space_action_reference": "robot_root",
+        "task_space_action_body_name": "flange",
+        "task_space_action_body_offset": [0.0, 0.0, 0.0],
+    }
+
+
+def test_task_space_deploy_metadata_distinguishes_newton_frame():
+    """Export metadata must make the Newton raw-flange ABI machine-readable."""
+    export_module = _load_export_module()
+
+    inputs, action = export_module.resolve_task_space_deploy_metadata(SimpleNamespace(**_newton_deploy_metadata()))
+
+    assert inputs["eef_pos"] == {
+        "policy_abi": "displayport_newton_flange_v1",
+        "physics_backend": "newton_mjwarp",
+        "coordinate_frame": "world",
+        "pose_reference": "flange",
+        "body_name": "flange",
+        "body_offset": [0.0, 0.0, 0.0],
+    }
+    assert inputs["eef_rot_6d"] == inputs["eef_pos"]
+    assert action == {
+        "policy_abi": "displayport_newton_flange_v1",
+        "physics_backend": "newton_mjwarp",
+        "pose_reference": "robot_root",
+        "body_name": "flange",
+        "body_offset": [0.0, 0.0, 0.0],
+    }
+
+
+def test_task_space_deploy_metadata_rejects_partial_contract():
+    """A partially declared frame contract must fail instead of exporting ambiguous inputs."""
+    export_module = _load_export_module()
+
+    with pytest.raises(ValueError, match="Incomplete task-space deployment metadata"):
+        export_module.resolve_task_space_deploy_metadata(
+            SimpleNamespace(task_space_policy_abi="displayport_newton_flange_v1")
+        )
+
+
+def test_export_task_space_action_preserves_legacy_metadata(monkeypatch):
+    """Direct helper callers must retain the original Isaac Lab action metadata."""
+    export_module = _load_export_module()
+    captured = {}
+
+    def annotate_output(_graph_name, semantics, export_with):
+        captured["semantics"] = semantics
+        captured["export_with"] = export_with
+
+    leapp_module = ModuleType("leapp")
+    leapp_module.__path__ = []
+    leapp_utils_module = ModuleType("leapp.utils")
+    leapp_utils_module.__path__ = []
+    tensor_description_module = ModuleType("leapp.utils.tensor_description")
+    tensor_description_module.TensorSemantics = SimpleNamespace
+    monkeypatch.setitem(sys.modules, "leapp", leapp_module)
+    monkeypatch.setitem(sys.modules, "leapp.utils", leapp_utils_module)
+    monkeypatch.setitem(sys.modules, "leapp.utils.tensor_description", tensor_description_module)
+    leapp_module.annotate = SimpleNamespace(output_tensors=annotate_output)
+
+    export_module.export_task_space_action(
+        "DisplayPortTaskSpace",
+        torch.zeros(1, 6),
+        "onnx",
+    )
+
+    assert captured["semantics"].extra == {
+        "isaaclab_connection": "action:arm_action:pose_rel",
+        "target_types": ["pose_rel"],
+    }
+    assert captured["export_with"] == "onnx"
+
+
+def test_task_space_action_export_includes_scale_clip_and_frame(monkeypatch):
+    """The custom LEAPP contract must preserve OSC transform and frame semantics."""
+    export_module = _load_export_module()
+    captured = {}
+
+    def _annotate_output(_graph_name, semantics, export_with):
+        captured["semantics"] = semantics
+        captured["export_with"] = export_with
+
+    leapp_module = ModuleType("leapp")
+    leapp_module.__path__ = []
+    leapp_utils_module = ModuleType("leapp.utils")
+    leapp_utils_module.__path__ = []
+    tensor_description_module = ModuleType("leapp.utils.tensor_description")
+    tensor_description_module.TensorSemantics = SimpleNamespace
+    monkeypatch.setitem(sys.modules, "leapp", leapp_module)
+    monkeypatch.setitem(sys.modules, "leapp.utils", leapp_utils_module)
+    monkeypatch.setitem(sys.modules, "leapp.utils.tensor_description", tensor_description_module)
+    leapp_module.annotate = SimpleNamespace(output_tensors=_annotate_output)
+
+    action_cfg = SimpleNamespace(
+        position_scale=[0.025, 0.025, 0.010],
+        orientation_scale=0.025,
+        controller_cfg=SimpleNamespace(target_types=["pose_rel"]),
+    )
+    env_cfg = SimpleNamespace(actions=SimpleNamespace(arm_action=action_cfg), **_newton_deploy_metadata())
+    contract = export_module.DisplayPortTaskSpaceContract()
+
+    contract.export_action(
+        contract.graph_name,
+        torch.tensor([[2.0, 0.0, -0.5, 0.0, 0.0, 0.0]]),
+        env_cfg,
+        "cpu",
+        torch.float32,
+        "onnx",
+        1.0,
+    )
+
+    semantics = captured["semantics"]
+    torch.testing.assert_close(semantics.ref, torch.tensor([[0.025, 0.0, -0.005, 0.0, 0.0, 0.0]]))
+    assert semantics.extra["scale"] == pytest.approx([0.025, 0.025, 0.010, 0.025, 0.025, 0.025])
+    assert semantics.extra["position_scale"] == pytest.approx([0.025, 0.025, 0.010])
+    assert semantics.extra["orientation_scale"] == pytest.approx(0.025)
+    assert semantics.extra["clip_actions"] == pytest.approx(1.0)
+    assert semantics.extra["policy_abi"] == "displayport_newton_flange_v1"
+    assert semantics.extra["physics_backend"] == "newton_mjwarp"
+    assert semantics.extra["pose_reference"] == "robot_root"
+    assert semantics.extra["body_name"] == "flange"
+    assert semantics.extra["body_offset"] == pytest.approx([0.0, 0.0, 0.0])
+    assert captured["export_with"] == "onnx"
 
 
 @pytest.mark.parametrize(

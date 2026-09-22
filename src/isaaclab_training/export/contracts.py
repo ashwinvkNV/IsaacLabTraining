@@ -131,8 +131,64 @@ def resolve_task_space_input_terms(env_cfg) -> dict[str, str]:
     return {_TASK_SPACE_INPUT_TERM_METADATA[term_name][0]: term_name for term_name in obs_order}
 
 
-def split_and_annotate_task_space_obs(graph_name: str, policy_obs, input_spec=_TASK_SPACE_INPUT_SPEC):
+_TASK_SPACE_DEPLOY_METADATA_FIELDS = (
+    "task_space_policy_abi",
+    "task_space_backend",
+    "task_space_observation_reference",
+    "task_space_observation_body_name",
+    "task_space_observation_body_offset",
+    "task_space_action_reference",
+    "task_space_action_body_name",
+    "task_space_action_body_offset",
+)
+
+
+def resolve_task_space_deploy_metadata(env_cfg) -> tuple[dict[str, dict], dict]:
+    """Resolve additive frame and ABI metadata for task-space deployment bundles."""
+    present = [hasattr(env_cfg, field) for field in _TASK_SPACE_DEPLOY_METADATA_FIELDS]
+    if not any(present):
+        return {}, {}
+    if not all(present):
+        missing = [
+            field
+            for field, is_present in zip(_TASK_SPACE_DEPLOY_METADATA_FIELDS, present, strict=True)
+            if not is_present
+        ]
+        raise ValueError(f"Incomplete task-space deployment metadata; missing {missing!r}.")
+
+    policy_abi = str(env_cfg.task_space_policy_abi)
+    backend = str(env_cfg.task_space_backend)
+    if not policy_abi or not backend:
+        raise ValueError("Task-space policy ABI and backend metadata must be non-empty strings.")
+
+    def offset(name: str) -> list[float]:
+        values = torch.as_tensor(getattr(env_cfg, name), dtype=torch.float64).flatten()
+        if values.numel() != 3 or not bool(torch.isfinite(values).all()):
+            raise ValueError(f"{name} must contain three finite values.")
+        return [float(value) for value in values.tolist()]
+
+    common = {"policy_abi": policy_abi, "physics_backend": backend}
+    observation = {
+        **common,
+        "coordinate_frame": "world",
+        "pose_reference": str(env_cfg.task_space_observation_reference),
+        "body_name": str(env_cfg.task_space_observation_body_name),
+        "body_offset": offset("task_space_observation_body_offset"),
+    }
+    action = {
+        **common,
+        "pose_reference": str(env_cfg.task_space_action_reference),
+        "body_name": str(env_cfg.task_space_action_body_name),
+        "body_offset": offset("task_space_action_body_offset"),
+    }
+    return {"eef_pos": observation, "eef_rot_6d": observation}, action
+
+
+def split_and_annotate_task_space_obs(
+    graph_name: str, policy_obs, input_spec=_TASK_SPACE_INPUT_SPEC, input_metadata: dict[str, dict] | None = None
+):
     """Expose EEF-first inputs while reconstructing the checkpoint trained actor order."""
+    input_metadata = input_metadata or {}
     import leapp
     from leapp.utils.tensor_description import TensorSemantics
 
@@ -145,7 +201,7 @@ def split_and_annotate_task_space_obs(graph_name: str, policy_obs, input_spec=_T
                 ref=policy_obs[:, index],
                 kind=kind,
                 element_names=[element_names],
-                extra={"source": source},
+                extra={"source": source, **input_metadata.get(name, {})},
             ),
         )
         actor_parts.append((actor_offset, part))
@@ -153,8 +209,13 @@ def split_and_annotate_task_space_obs(graph_name: str, policy_obs, input_spec=_T
     return torch.cat([part for _, part in actor_parts], dim=-1)
 
 
-def export_task_space_action(graph_name: str, tensor, export_method: str) -> None:
+def export_task_space_action(graph_name: str, tensor, export_method: str, extra_metadata: dict | None = None) -> None:
     """Annotate the deploy-facing clipped and scaled task-space action."""
+    metadata = {
+        "isaaclab_connection": "action:arm_action:pose_rel",
+        "target_types": ["pose_rel"],
+    }
+    metadata.update(extra_metadata or {})
     import leapp
     from leapp.utils.tensor_description import TensorSemantics
 
@@ -165,10 +226,7 @@ def export_task_space_action(graph_name: str, tensor, export_method: str) -> Non
             ref=tensor,
             kind="target/body/pose_relative",
             element_names=[_ACTION_ELEMENT_NAMES],
-            extra={
-                "isaaclab_connection": "action:arm_action:pose_rel",
-                "target_types": ["pose_rel"],
-            },
+            extra=metadata,
         ),
         export_with=export_method,
     )
@@ -235,7 +293,10 @@ class DisplayPortTaskSpaceContract:
         policy_obs = task_space_policy_obs(obs).to(dtype=dtype)
         obs_for_policy = obs.clone()
         input_spec = resolve_task_space_input_spec(env_cfg)
-        obs_for_policy["policy"] = split_and_annotate_task_space_obs(graph_name, policy_obs, input_spec=input_spec)
+        input_metadata, _ = resolve_task_space_deploy_metadata(env_cfg)
+        obs_for_policy["policy"] = split_and_annotate_task_space_obs(
+            graph_name, policy_obs, input_spec=input_spec, input_metadata=input_metadata
+        )
         return obs_for_policy
 
     def export_action(
@@ -248,9 +309,19 @@ class DisplayPortTaskSpaceContract:
         export_method: str,
         clip_actions: float | None,
     ) -> None:
+        from isaaclab_training.mdp.actions import _pose_rel_action_extra
+
         scale = task_space_action_scale(env_cfg, device, dtype)
         processed_action = process_task_space_action(actions, scale, clip_actions)
-        export_task_space_action(graph_name, processed_action, export_method)
+        _, action_metadata = resolve_task_space_deploy_metadata(env_cfg)
+        action_extra = _pose_rel_action_extra(
+            position_scale=env_cfg.actions.arm_action.position_scale,
+            orientation_scale=env_cfg.actions.arm_action.orientation_scale,
+            target_types=env_cfg.actions.arm_action.controller_cfg.target_types,
+        )
+        action_extra.update(action_metadata)
+        action_extra["clip_actions"] = clip_actions
+        export_task_space_action(graph_name, processed_action, export_method, extra_metadata=action_extra)
 
 
 CONTRACTS: dict[str, ExportContract] = {

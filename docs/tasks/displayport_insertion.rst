@@ -377,11 +377,17 @@ Low plug/socket friction reduces sticking during blade engagement. Gripper finge
 Actuator Modeling
 ~~~~~~~~~~~~~~~~~
 
-The Rizon 4s uses ``ImplicitActuatorCfg`` with per-joint-group arm tuning from ``FLEXIV_RIZON4S_GRAV_GRIPPER_CFG``, plus dedicated Grav gripper actuators:
+The PhysX and joint-space profiles inherit ``ImplicitActuatorCfg`` arm groups from
+``FLEXIV_RIZON4S_GRAV_GRIPPER_CFG``. The Newton OSC profile replaces only the seven arm joints with zero-gain
+``IdealPDActuatorCfg`` groups. Newton-native execution enforces the actuator effort limit, while
+``joint_velocity_limit`` requests the backend solver limit; ``actuator_velocity_limit`` remains available as
+actuator metadata. OSC remains the torque source, and the IdealPD wrapper adds no joint-position stiffness.
+
+The PhysX profiles use these implicit Grav gripper actuators:
 
 .. code-block:: python
 
-    # Grav gripper actuator configuration
+    # PhysX Grav gripper actuator configuration
     self.scene.robot.actuators["gripper_drive"] = ImplicitActuatorCfg(
         joint_names_expr=["finger_joint"],
         effort_limit_sim=2.0,
@@ -397,9 +403,15 @@ The Rizon 4s uses ``ImplicitActuatorCfg`` with per-joint-group arm tuning from `
         damping=0.0,
     )
 
+The Newton profile also uses implicit gripper actuators, but configures the drive/passive effort limits to
+``200/20 N*m``, velocity limits to ``2/1 rad/s``, stiffness to ``2000``, and damping to ``10``. Its passive group
+covers both knuckle and outer-finger joints.
+
 .. note::
 
-   **Flexiv Rizon 4s**: Domain randomization for actuator gains and joint friction is not included in the Rizon 4s ``EventCfg``. The real-world Flexiv controller is stable and precise enough that the simulation policy transfers without these additional randomizations, consistent with the gear assembly Flexiv setup.
+   **Flexiv Rizon 4s**: Arm PD-gain randomization is disabled for torque-level OSC. The recommended Newton
+   profile retains additive arm-joint friction randomization from ``0`` to ``0.15``; remove that event only for a
+   controlled parity ablation.
 
 .. _taskspace-action-space:
 
@@ -459,8 +471,9 @@ target. What differs is the space that delta lives in.
 
       Two details matter for deployment:
 
-      * The arm's joint PD gains are **zeroed** (``actuators[...].stiffness = 0.0``); all compliance comes from the
-        task-space stiffness above, so the controller — not the joint servo — sets the contact behavior.
+      * The arm's joint PD gains are **zeroed**. The Newton profile uses ``IdealPDActuatorCfg`` groups with
+        zero stiffness and damping, so all commanded compliance comes from OSC. Native Newton enforces effort
+        saturation; the configured joint velocity limit requests a solver-side clamp.
       * The action is applied at the **flange**. PhysX observes the TCP and therefore requires the real-robot bridge
         to reproduce that frame split; Newton observes and controls the flange.
 
@@ -763,9 +776,9 @@ Defined in ``config/displayport_rizon_4s/agents/rsl_rl_ppo_cfg.py``.
    * - ``desired_kl``
      - ``0.008``
      - Target KL for adaptive LR schedule.
-   * - ``init_noise_std``
+   * - ``actor.distribution_cfg.init_std``
      - ``1.0``
-     - Exploration noise. Lower for fine-tuning a near-working policy.
+     - Exploration noise. Override with ``agent.actor.distribution_cfg.init_std=<value>`` when fine-tuning.
 
 **Suggested tuning order:** (1) confirm asset/physics quality, (2) curriculum depth and anneal schedule, (3) linear vs exponential reward balance, (4) socket pose DR and observation noise, (5) action scale, (6) PPO training length.
 
@@ -854,15 +867,18 @@ recommended fixed profile uses the stable Newton 1.6 release with:
      - 256 per distributed rank (1,024 total on four ranks)
    * - OSC
      - Full inertial-dynamics decoupling enabled; task stiffness ``[300, 300, 300, 30, 30, 30]``; damping ratio ``[1, 1, 1, 1, 1, 1]``
-   * - Action scale
-     - Translation ``[0.025, 0.025, 0.010]`` m and rotation ``0.025`` rad
+   * - Action and actuator contract
+     - Translation ``[0.025, 0.025, 0.010]`` m, rotation ``0.025`` rad, and zero-gain effort-bounded IdealPD arm actuators
    * - Socket observation noise
      - Uniform ±10 mm position error, sampled once and held for the episode
    * - Reset curriculum
      - At-goal probability annealed from ``0.8`` to ``0`` over iterations 0–500
 
-Both the PhysX and Newton configurations inherit Isaac Lab's stock nominal Rizon 4s with Grav USD. Run a portable
-one-iteration smoke with this default asset so the checkpoint and export contract initializes end to end:
+Both the PhysX and Newton configurations inherit Isaac Lab's stock nominal Rizon 4s with Grav USD. The stock
+flange is a mass-only marker with zero authored inertia. Before Newton imports the scene, the task authors the same
+uniform-sphere inertia that Newton 1.6 previously generated as a fallback (density ``1000 kg/m^3``) and a valid
+principal-axis quaternion. A valid inertia supplied by a future robot USD is preserved. Run a portable one-iteration
+smoke with this default asset so the checkpoint and export contract initializes end to end:
 
 .. code-block:: bash
 
@@ -911,9 +927,10 @@ Use the same absolute override when playing or exporting that checkpoint so asse
 resolved consistently.
 
 The nominal USD is the portable default, not an exact reproduction of the real-robot-best run. Reproduce that
-profile with seed ``123`` and the calibrated USD for the target arm. Newton validates authored inertial properties;
-if it reports an invalid flange inertia, it substitutes a fallback that changes the mass matrix used by the fully
-decoupled OSC. Fix and requalify the asset rather than silently changing inertia in configuration code.
+profile with seed ``123`` and the calibrated USD for the target arm. The same explicit flange-marker inertia check is
+applied to an overridden USD. Invalid mass or principal axes, a missing flange, or missing point-SDF collision
+meshes fail before training; valid calibrated inertia is never overwritten. Requalify any materially changed robot asset because full
+inertial decoupling consumes its mass matrix.
 
 .. important::
 
@@ -921,7 +938,9 @@ decoupled OSC. Fix and requalify the asset rather than silently changing inertia
    is ``socket_pos`` first, followed by raw ``flange`` position, flange 6D rotation, and socket 6D rotation. The
    existing PhysX actor is TCP-first: TCP position and 6D rotation, followed by socket position and rotation.
    Both vectors contain 18 values, so using the wrong task id can load successfully while silently feeding every
-   field at the wrong offset. Always train, play, and export with task ids from the same backend family.
+   field at the wrong offset. Always train, play, and export with task ids from the same backend family. LEAPP bundles
+   now include the policy ABI, backend, observed body/offset, action body/offset, and six-axis action scale so deployment
+   tooling can reject a mismatched frame contract.
 
 Play a Newton checkpoint with the matching deterministic task:
 

@@ -10,7 +10,6 @@ Targets the DisplayPort plug/socket assets published under
 plain :class:`~isaaclab.sim.UsdFileCfg` at ``scale=(1,1,1)``.
 """
 
-import os
 from dataclasses import MISSING
 
 import torch
@@ -28,6 +27,7 @@ from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
+from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.sim.simulation_cfg import SimulationCfg
 from isaaclab.utils.configclass import configclass
 from isaaclab.utils.noise import UniformNoiseCfg
@@ -35,13 +35,7 @@ from isaaclab.utils.noise import UniformNoiseCfg
 import isaaclab_training.mdp as mdp
 from isaaclab_training.mdp.noise_models import ResetSampledConstantNoiseModelCfg
 
-CABLE_INSERTION_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# DisplayPort assets are published on the Isaac staging asset server. They are not yet mirrored
-# to the production bucket that ``ISAAC_NUCLEUS_DIR`` resolves to, so the root is pinned here.
-# Switch to ``f"{ISAAC_NUCLEUS_DIR}/Props/Factory/display_port_cable_assets"`` once promoted.
-_DISPLAY_ASSETS_STAGING_ROOT = "https://omniverse-content-staging.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac"
-DISPLAY_ASSETS_DIR = f"{_DISPLAY_ASSETS_STAGING_ROOT}/Props/Factory/display_port_cable_assets"
+DISPLAY_ASSETS_DIR = f"{ISAAC_NUCLEUS_DIR}/Props/Factory/display_port_cable_assets"
 
 
 # The asset offsets below are plain Python tuples evaluated at import time, while
@@ -122,62 +116,6 @@ _PLUG_ROOT_POS, _DEFAULT_PLUG_ROT = compute_plug_pose(
 ##
 
 
-@configclass
-class DisplayPortPlug(RigidObjectCfg):
-    """DisplayPort right-angle plug (held asset) — dynamic."""
-
-    prim_path = "{ENV_REGEX_NS}/DisplayPortPlug"
-    spawn = sim_utils.UsdFileCfg(
-        usd_path=f"{DISPLAY_ASSETS_DIR}/displayport_plug.usd",
-        scale=(1.0, 1.0, 1.0),
-        activate_contact_sensors=True,
-        rigid_props=sim_utils.RigidBodyPropertiesCfg(
-            disable_gravity=False,
-            kinematic_enabled=False,
-            max_depenetration_velocity=0.5,
-            linear_damping=0.0,
-            angular_damping=0.0,
-            max_linear_velocity=1000.0,
-            max_angular_velocity=3666.0,
-            enable_gyroscopic_forces=True,
-            solver_position_iteration_count=128,
-            solver_velocity_iteration_count=1,
-            max_contact_impulse=None,
-        ),
-        mass_props=sim_utils.MassPropertiesCfg(mass=0.03),
-        collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.00001, rest_offset=-0.00005),
-    )
-    init_state = RigidObjectCfg.InitialStateCfg(pos=_PLUG_ROOT_POS, rot=_DEFAULT_PLUG_ROT)
-
-
-@configclass
-class DisplayPortSocket(RigidObjectCfg):
-    """DisplayPort socket (fixed asset) — kinematic."""
-
-    prim_path = "{ENV_REGEX_NS}/DisplayPortSocket"
-    spawn = sim_utils.UsdFileCfg(
-        usd_path=f"{DISPLAY_ASSETS_DIR}/displayport_socket_no_protrusions.usd",
-        scale=(1.0, 1.0, 1.0),
-        activate_contact_sensors=False,
-        rigid_props=sim_utils.RigidBodyPropertiesCfg(
-            disable_gravity=False,
-            kinematic_enabled=True,
-            max_depenetration_velocity=5.0,
-            linear_damping=0.0,
-            angular_damping=0.0,
-            max_linear_velocity=1000.0,
-            max_angular_velocity=3666.0,
-            enable_gyroscopic_forces=True,
-            solver_position_iteration_count=128,
-            solver_velocity_iteration_count=1,
-            max_contact_impulse=1e32,
-        ),
-        mass_props=sim_utils.MassPropertiesCfg(mass=None),
-        collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.0001, rest_offset=-0.0001),
-    )
-    init_state = RigidObjectCfg.InitialStateCfg(pos=_SOCKET_ROOT_POS, rot=_DEFAULT_SOCKET_ROT)
-
-
 ##
 # Environment configuration
 ##
@@ -195,8 +133,57 @@ class DisplayportInsertionSceneCfg(InteractiveSceneCfg):
         init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, -1.05)),
     )
 
-    dp_plug = DisplayPortPlug()
-    dp_socket = DisplayPortSocket()
+    # DisplayPort right-angle plug (held asset) - dynamic.
+    dp_plug = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/DisplayPortPlug",
+        spawn=sim_utils.UsdFileCfg(
+            usd_path=f"{DISPLAY_ASSETS_DIR}/displayport_plug.usd",
+            scale=(1.0, 1.0, 1.0),
+            activate_contact_sensors=True,
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                disable_gravity=False,
+                kinematic_enabled=False,
+                max_depenetration_velocity=0.5,
+                linear_damping=0.0,
+                angular_damping=0.0,
+                max_linear_velocity=1000.0,
+                max_angular_velocity=3666.0,
+                enable_gyroscopic_forces=True,
+                solver_position_iteration_count=128,
+                solver_velocity_iteration_count=1,
+                max_contact_impulse=None,
+            ),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.03),
+            collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.00001, rest_offset=-0.00005),
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=_PLUG_ROOT_POS, rot=_DEFAULT_PLUG_ROT),
+    )
+
+    # DisplayPort socket (fixed asset) - kinematic.
+    dp_socket = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/DisplayPortSocket",
+        spawn=sim_utils.UsdFileCfg(
+            usd_path=f"{DISPLAY_ASSETS_DIR}/displayport_socket_no_protrusions.usd",
+            scale=(1.0, 1.0, 1.0),
+            activate_contact_sensors=False,
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                disable_gravity=False,
+                kinematic_enabled=True,
+                max_depenetration_velocity=5.0,
+                linear_damping=0.0,
+                angular_damping=0.0,
+                max_linear_velocity=1000.0,
+                max_angular_velocity=3666.0,
+                enable_gyroscopic_forces=True,
+                solver_position_iteration_count=128,
+                solver_velocity_iteration_count=1,
+                max_contact_impulse=1e32,
+            ),
+            mass_props=sim_utils.MassPropertiesCfg(mass=None),
+            collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.0001, rest_offset=-0.0001),
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=_SOCKET_ROOT_POS, rot=_DEFAULT_SOCKET_ROT),
+    )
 
     robot: ArticulationCfg = MISSING
 

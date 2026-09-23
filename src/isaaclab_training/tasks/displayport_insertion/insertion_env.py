@@ -7,6 +7,23 @@
 
 Adds success metrics to ``extras["log"]`` for RSL-RL without changing the MDP
 observation, action, reward, or termination logic.
+
+.. note::
+   Manager-based environments are normally fully configuration driven, with no environment
+   subclass. This class is a deliberate exception, kept only to publish per-step success
+   metrics, because no manager currently offers a per-step hook that can write arbitrary
+   ``extras["log"]`` entries:
+
+   - ``EventManager`` supports only ``startup``, ``reset`` and ``interval`` modes.
+   - ``RewardManager`` logs episodic sums under ``Episode_Reward/<term>``; a zero-weight term
+     logs zero, so it cannot carry a metric.
+   - ``CurriculumManager`` and ``TerminationManager`` run at reset or termination only, so
+     neither can express a per-step rate.
+
+   Expressing these through managers would rename the keys and change their semantics from
+   per-step to episodic, which would break comparison against existing training runs. The MDP
+   itself stays fully cfg driven; this class adds logging only, and overrides no MDP behaviour.
+   If a per-step metrics hook lands in Isaac Lab, this class should be removed in favour of it.
 """
 
 from __future__ import annotations

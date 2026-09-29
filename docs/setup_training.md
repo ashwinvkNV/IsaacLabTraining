@@ -128,11 +128,11 @@ uv run isaaclab train --rl_library rsl_rl \
   --video --video_length 200 --video_interval 76800
 ```
 
-DisplayPort assets currently resolve from the Isaac staging server. Release jobs
-verify the expected plug/socket hashes. Set
-`ISAACLAB_TRAINING_DISPLAY_ASSETS_DIR` to an approved versioned mirror when
-available; the Newton task fails at startup if any required point-SDF mesh is
-missing.
+DisplayPort assets resolve from the versioned Isaac production asset root
+selected by the installed Isaac Sim release. Set
+`ISAACLAB_TRAINING_DISPLAY_ASSETS_DIR` to an approved mirror for offline or
+air-gapped deployments. The Newton task fails at startup if any required
+point-SDF mesh is missing.
 
 For the recommended Newton 1.6 task-space profile, use 256 environments per
 distributed rank. This command follows the packaged default and trains with the

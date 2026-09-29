@@ -118,11 +118,11 @@ uv run isaaclab train --rl_library rsl_rl \
 
 ### Newton task-space training
 
-The packaged DisplayPort USDs currently resolve from the Isaac staging asset
-server. Release jobs pin and verify their content hashes. Set
-`ISAACLAB_TRAINING_DISPLAY_ASSETS_DIR` to an approved versioned mirror before
-launching if your deployment cannot depend on staging. Newton validates every
-required point-SDF mesh after composition and fails if the asset layout changes.
+The DisplayPort USDs resolve from the versioned Isaac production asset root
+selected by the installed Isaac Sim release. Set
+`ISAACLAB_TRAINING_DISPLAY_ASSETS_DIR` to an approved mirror for offline or
+air-gapped deployments. Newton validates every required point-SDF mesh after
+composition and fails if the asset layout changes.
 
 
 The Newton task is a separate checkpoint ABI and must be selected explicitly.

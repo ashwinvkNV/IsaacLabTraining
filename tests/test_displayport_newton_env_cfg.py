@@ -16,6 +16,7 @@ import warp as wp
 from isaaclab.actuators import IdealPDActuatorCfg, ImplicitActuatorCfg
 from isaaclab.controllers.operational_space_cfg import OperationalSpaceControllerCfg
 from isaaclab.managers import ObservationTermCfg, SceneEntityCfg
+from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.utils.noise import UniformNoiseCfg
 from isaaclab_assets import FLEXIV_RIZON4S_GRAV_GRIPPER_CFG
 from isaaclab_newton.physics import MJWarpSolverCfg, NewtonCfg
@@ -68,6 +69,8 @@ from isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s.t
     _use_explicit_effort_control_arm_actuators,
 )
 from isaaclab_training.tasks.displayport_insertion.displayport_insertion_env_cfg import (
+    _DISPLAY_ASSETS_DEFAULT_DIR,
+    DISPLAY_ASSETS_DIR,
     PLUG_GOAL_ROT,
     PLUG_INSERTION_OFFSET,
     SOCKET_INSERTION_OFFSET,
@@ -572,8 +575,11 @@ def test_displayport_newton_timing_solver_and_point_sdf_assets():
     assert collision.reduce_contacts is True
     assert collision.max_triangle_pairs == 2**25
 
-    assert cfg.scene.dp_plug.spawn.usd_path.endswith("/displayport_plug.usd")
-    assert cfg.scene.dp_socket.spawn.usd_path.endswith("/displayport_socket_no_protrusions.usd")
+    expected_default_asset_dir = f"{ISAAC_NUCLEUS_DIR}/Props/Factory/display_port_cable_assets"
+    assert expected_default_asset_dir == _DISPLAY_ASSETS_DEFAULT_DIR
+    assert "staging" not in _DISPLAY_ASSETS_DEFAULT_DIR
+    assert cfg.scene.dp_plug.spawn.usd_path == f"{DISPLAY_ASSETS_DIR}/displayport_plug.usd"
+    assert cfg.scene.dp_socket.spawn.usd_path == f"{DISPLAY_ASSETS_DIR}/displayport_socket_no_protrusions.usd"
     plug_sdf_paths = ("/collision_mesh",)
     socket_sdf_paths = tuple(f"/tn__2584N111_DisplayportCord_jP/Body{body_id}/Mesh" for body_id in (5, 6, 8, 12, 13))
     collision_fragment_sets = (

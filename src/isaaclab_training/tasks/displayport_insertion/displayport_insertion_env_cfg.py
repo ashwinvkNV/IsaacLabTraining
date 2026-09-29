@@ -31,6 +31,7 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim.simulation_cfg import SimulationCfg
+from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.utils.configclass import configclass
 from isaaclab.utils.noise import UniformNoiseCfg
 from isaaclab_visualizers.kit import KitVisualizerCfg
@@ -38,13 +39,8 @@ from isaaclab_visualizers.kit import KitVisualizerCfg
 import isaaclab_training.mdp as mdp
 from isaaclab_training.mdp.noise_models import ResetSampledConstantNoiseModelCfg
 
-CABLE_INSERTION_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# DisplayPort assets are published on the Isaac staging asset server. They are not yet mirrored
-# to the production bucket that ``ISAAC_NUCLEUS_DIR`` resolves to, so the root is pinned here.
-# Switch to ``f"{ISAAC_NUCLEUS_DIR}/Props/Factory/display_port_cable_assets"`` once promoted.
-_DISPLAY_ASSETS_STAGING_ROOT = "https://omniverse-content-staging.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac"
-_DISPLAY_ASSETS_DEFAULT_DIR = f"{_DISPLAY_ASSETS_STAGING_ROOT}/Props/Factory/display_port_cable_assets"
+# Resolve task assets from the production root selected by the installed Isaac Sim version.
+_DISPLAY_ASSETS_DEFAULT_DIR = f"{ISAAC_NUCLEUS_DIR}/Props/Factory/display_port_cable_assets"
 DISPLAY_ASSETS_DIR = os.environ.get("ISAACLAB_TRAINING_DISPLAY_ASSETS_DIR", _DISPLAY_ASSETS_DEFAULT_DIR).rstrip("/")
 
 

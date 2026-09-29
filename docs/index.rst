@@ -59,8 +59,10 @@ Flexiv Rizon 4s arm with a Grav parallel gripper.
      - ``IsaacTraining-DisplayPortInsertion-Rizon4s-Joint-ROS-Inference``
      - Useful for experiments when joint velocity is available.
 
-Use the matching ``-Play`` tasks for visualization and evaluation, and the plain
-non-ROS-inference tasks for ablations you do not intend to deploy directly.
+For visualization and evaluation, play a training task id directly: the play scripts apply the
+configuration's :meth:`play_mode` overrides (fewer environments, wider spacing, observation
+corruption disabled). Pass ``--train_env_cfg`` to play the training configuration unchanged.
+Use the plain non-ROS-inference tasks for ablations you do not intend to deploy directly.
 
 Repository Architecture
 -----------------------

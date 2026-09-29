@@ -431,13 +431,11 @@ class Rizon4sTaskSpaceDisplayportInsertionEnvCfg(DisplayportInsertionEnvCfg):
         # Use 1:1 linear:exponential keypoint-tracking reward weighting.
         self.rewards.plug_socket_keypoint_tracking_exp.weight = abs(self.rewards.plug_socket_keypoint_tracking.weight)
 
+    def play_mode(self):
+        """Apply playback overrides on top of the shared Isaac Lab defaults.
 
-@configclass
-class Rizon4sTaskSpaceDisplayportInsertionEnvCfg_PLAY(Rizon4sTaskSpaceDisplayportInsertionEnvCfg):
-    """Play configuration for task-space DisplayPort insertion."""
-
-    def __post_init__(self):
-        super().__post_init__()
-        self.scene.num_envs = 50
+        ``super().play_mode()`` caps ``num_envs`` and disables observation corruption; only the
+        wider env spacing is specific to this task.
+        """
+        super().play_mode()
         self.scene.env_spacing = 2.5
-        self.observations.policy.enable_corruption = False

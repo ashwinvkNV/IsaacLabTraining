@@ -3,7 +3,13 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Flexiv Rizon 4s DisplayPort insertion task registrations."""
+"""Flexiv Rizon 4s DisplayPort insertion task registrations.
+
+Separate ``-Play`` task ids are intentionally not registered. Isaac Lab retired them in favour
+of :meth:`play_mode` overrides that the play scripts apply to the training configuration, so
+playing a training id picks up the task's play-mode behaviour automatically. Any remaining
+``-Play`` id resolves to its training id with a deprecation warning.
+"""
 
 from __future__ import annotations
 
@@ -33,14 +39,8 @@ _TASKS = {
     "IsaacTraining-DisplayPortInsertion-Rizon4s-Joint": (
         f"{__name__}.joint_pos_env_cfg:Rizon4sGravDisplayportInsertionEnvCfg"
     ),
-    "IsaacTraining-DisplayPortInsertion-Rizon4s-Joint-Play": (
-        f"{__name__}.joint_pos_env_cfg:Rizon4sGravDisplayportInsertionEnvCfg_PLAY"
-    ),
     "IsaacTraining-DisplayPortInsertion-Rizon4s-Joint-NoJointVel": (
         f"{__name__}.joint_pos_env_cfg:Rizon4sGravDisplayportInsertionNoJointVelEnvCfg"
-    ),
-    "IsaacTraining-DisplayPortInsertion-Rizon4s-Joint-NoJointVel-Play": (
-        f"{__name__}.joint_pos_env_cfg:Rizon4sGravDisplayportInsertionNoJointVelEnvCfg_PLAY"
     ),
     "IsaacTraining-DisplayPortInsertion-Rizon4s-Joint-NoJointVel-ROS-Inference": (
         f"{__name__}.ros_inference_env_cfg:Rizon4sGravDisplayportInsertionNoJointVelROSInferenceEnvCfg"
@@ -51,27 +51,15 @@ _TASKS = {
     "IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace": (
         f"{__name__}.task_space_env_cfg:Rizon4sTaskSpaceDisplayportInsertionEnvCfg"
     ),
-    "IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Play": (
-        f"{__name__}.task_space_env_cfg:Rizon4sTaskSpaceDisplayportInsertionEnvCfg_PLAY"
-    ),
     "IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference": (
-        f"{__name__}.task_space_ros_inference_env_cfg:"
-        "Rizon4sTaskSpaceDisplayportInsertionROSInferenceEnvCfg"
+        f"{__name__}.task_space_ros_inference_env_cfg:Rizon4sTaskSpaceDisplayportInsertionROSInferenceEnvCfg"
     ),
 }
 
 _ALIASES = {
-    "IsaacContrib-Deploy-DisplayportInsertion-Rizon4s-Grav": (
-        "IsaacTraining-DisplayPortInsertion-Rizon4s-Joint"
-    ),
-    "IsaacContrib-Deploy-DisplayportInsertion-Rizon4s-Grav-Play": (
-        "IsaacTraining-DisplayPortInsertion-Rizon4s-Joint-Play"
-    ),
+    "IsaacContrib-Deploy-DisplayportInsertion-Rizon4s-Grav": ("IsaacTraining-DisplayPortInsertion-Rizon4s-Joint"),
     "IsaacContrib-Deploy-DisplayportInsertion-Rizon4s-Grav-NoJointVel": (
         "IsaacTraining-DisplayPortInsertion-Rizon4s-Joint-NoJointVel"
-    ),
-    "IsaacContrib-Deploy-DisplayportInsertion-Rizon4s-Grav-NoJointVel-Play": (
-        "IsaacTraining-DisplayPortInsertion-Rizon4s-Joint-NoJointVel-Play"
     ),
     "IsaacContrib-Deploy-DisplayportInsertion-Rizon4s-Grav-NoJointVel-ROS-Inference": (
         "IsaacTraining-DisplayPortInsertion-Rizon4s-Joint-NoJointVel-ROS-Inference"
@@ -81,9 +69,6 @@ _ALIASES = {
     ),
     "IsaacContrib-Deploy-DisplayportInsertion-Rizon4s-Grav-TaskSpace": (
         "IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace"
-    ),
-    "IsaacContrib-Deploy-DisplayportInsertion-Rizon4s-Grav-TaskSpace-Play": (
-        "IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Play"
     ),
     "IsaacContrib-Deploy-DisplayportInsertion-Rizon4s-Grav-TaskSpace-ROS-Inference": (
         "IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference"

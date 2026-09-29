@@ -143,6 +143,7 @@ from isaaclab_training.tasks.displayport_insertion.displayport_insertion_env_cfg
     compute_socket_root,
 )
 from isaaclab_tasks.utils import get_checkpoint_path, setup_preset_cli
+from isaaclab_rl.entrypoints.common import resolve_play_task_name
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 from isaaclab_training.utils.success_utils import SuccessTracker  # isort: skip
@@ -162,6 +163,12 @@ parser.add_argument(
     "--use_pretrained_checkpoint", action="store_true", help="Use the published Nucleus pretrained checkpoint."
 )
 parser.add_argument("--real-time", action="store_true", default=False, help="Throttle stepping to wall-clock dt.")
+parser.add_argument(
+    "--train_env_cfg",
+    action="store_true",
+    default=False,
+    help="Play the training configuration as-is, skipping the config's play_mode overrides.",
+)
 
 # Initial / observed state
 parser.add_argument(
@@ -289,6 +296,10 @@ cli_args.add_rsl_rl_args(parser)
 add_launcher_args(parser)
 args_cli, remaining_args = setup_preset_cli(parser)
 sys.argv = [sys.argv[0]] + remaining_args
+
+# Separate ``-Play`` task ids were retired in favour of ``play_mode`` overrides; redirect any
+# remaining use to the training id (emits a deprecation warning) so older commands keep working.
+args_cli.task = resolve_play_task_name(args_cli.task)
 
 installed_version = metadata.version("rsl-rl-lib")
 
@@ -1832,7 +1843,7 @@ def _write_run_metadata(
     print(f"[INFO] Wrote run config to {path}")
 
 
-@hydra_task_config(args_cli.task, args_cli.agent)
+@hydra_task_config(args_cli.task, args_cli.agent, play_mode=not args_cli.train_env_cfg)
 def main(  # noqa: C901
     env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlBaseRunnerCfg
 ):

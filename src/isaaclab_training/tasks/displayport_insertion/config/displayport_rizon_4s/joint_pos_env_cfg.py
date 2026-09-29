@@ -392,16 +392,14 @@ class Rizon4sGravDisplayportInsertionEnvCfg(DisplayportInsertionEnvCfg):
         self.terminations.plug_orientation_exceeded.params["end_effector_body_name"] = self.end_effector_body_name
         self.terminations.plug_orientation_exceeded.params["grasp_rot_offset"] = self.grasp_rot_offset
 
+    def play_mode(self):
+        """Apply playback overrides on top of the shared Isaac Lab defaults.
 
-@configclass
-class Rizon4sGravDisplayportInsertionEnvCfg_PLAY(Rizon4sGravDisplayportInsertionEnvCfg):
-    """Play configuration for Flexiv Rizon 4s DisplayPort insertion."""
-
-    def __post_init__(self):
-        super().__post_init__()
-        self.scene.num_envs = 50
+        ``super().play_mode()`` caps ``num_envs`` and disables observation corruption; only the
+        wider env spacing is specific to this task.
+        """
+        super().play_mode()
         self.scene.env_spacing = 2.5
-        self.observations.policy.enable_corruption = False
 
 
 @configclass
@@ -415,14 +413,3 @@ class Rizon4sGravDisplayportInsertionNoJointVelEnvCfg(Rizon4sGravDisplayportInse
         super().__post_init__()
         # Remove joint velocity from the actor observation group
         self.observations.policy.joint_vel = None
-
-
-@configclass
-class Rizon4sGravDisplayportInsertionNoJointVelEnvCfg_PLAY(Rizon4sGravDisplayportInsertionNoJointVelEnvCfg):
-    """Play configuration for the no-joint-velocity joint-space variant."""
-
-    def __post_init__(self):
-        super().__post_init__()
-        self.scene.num_envs = 50
-        self.scene.env_spacing = 2.5
-        self.observations.policy.enable_corruption = False

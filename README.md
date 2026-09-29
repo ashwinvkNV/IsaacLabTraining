@@ -78,13 +78,10 @@ Preferred task IDs use the repo-owned `IsaacTraining-*` namespace:
 
 ```text
 IsaacTraining-DisplayPortInsertion-Rizon4s-Joint
-IsaacTraining-DisplayPortInsertion-Rizon4s-Joint-Play
 IsaacTraining-DisplayPortInsertion-Rizon4s-Joint-NoJointVel
-IsaacTraining-DisplayPortInsertion-Rizon4s-Joint-NoJointVel-Play
 IsaacTraining-DisplayPortInsertion-Rizon4s-Joint-NoJointVel-ROS-Inference
 IsaacTraining-DisplayPortInsertion-Rizon4s-Joint-ROS-Inference
 IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace
-IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Play
 IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference
 ```
 

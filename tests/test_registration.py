@@ -6,25 +6,19 @@ import isaaclab_training.tasks  # noqa: F401
 
 EXPECTED_TASKS = {
     "IsaacTraining-DisplayPortInsertion-Rizon4s-Joint",
-    "IsaacTraining-DisplayPortInsertion-Rizon4s-Joint-Play",
     "IsaacTraining-DisplayPortInsertion-Rizon4s-Joint-NoJointVel",
-    "IsaacTraining-DisplayPortInsertion-Rizon4s-Joint-NoJointVel-Play",
     "IsaacTraining-DisplayPortInsertion-Rizon4s-Joint-NoJointVel-ROS-Inference",
     "IsaacTraining-DisplayPortInsertion-Rizon4s-Joint-ROS-Inference",
     "IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace",
-    "IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Play",
     "IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference",
 }
 
 EXPECTED_ALIASES = {
     "IsaacContrib-Deploy-DisplayportInsertion-Rizon4s-Grav",
-    "IsaacContrib-Deploy-DisplayportInsertion-Rizon4s-Grav-Play",
     "IsaacContrib-Deploy-DisplayportInsertion-Rizon4s-Grav-NoJointVel",
-    "IsaacContrib-Deploy-DisplayportInsertion-Rizon4s-Grav-NoJointVel-Play",
     "IsaacContrib-Deploy-DisplayportInsertion-Rizon4s-Grav-NoJointVel-ROS-Inference",
     "IsaacContrib-Deploy-DisplayportInsertion-Rizon4s-Grav-ROS-Inference",
     "IsaacContrib-Deploy-DisplayportInsertion-Rizon4s-Grav-TaskSpace",
-    "IsaacContrib-Deploy-DisplayportInsertion-Rizon4s-Grav-TaskSpace-Play",
     "IsaacContrib-Deploy-DisplayportInsertion-Rizon4s-Grav-TaskSpace-ROS-Inference",
 }
 

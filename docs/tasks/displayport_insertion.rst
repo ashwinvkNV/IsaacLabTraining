@@ -669,6 +669,19 @@ Defined in ``config/displayport_rizon_4s/joint_pos_env_cfg.py`` → ``reset_plug
 
 If ``Metrics/success_rate`` is high early but collapses after iteration ~500, the curriculum may be annealing too aggressively — extend ``anneal_end_iter`` or raise ``at_goal_prob_final`` temporarily.
 
+.. note::
+
+   **Task-space configs** (``task_space_env_cfg.py``) measure at-goal depths from the plug's
+   *physical seat*, not from the socket keypoint. The keypoint (used by observations, reward and
+   the success metric) lies 1.84 mm deeper than the plug can physically go and 0.6 mm off-centre
+   along the socket's wide axis, so spawning at it made shallow at-goal resets start
+   interpenetrating the socket (up to 1.8 mm overlap, ~500 N depenetration kick, ~12% of at-goal
+   episodes terminated within 1 s). ``at_goal_seat_offset = [0.00184, 0.0, -0.0006]`` (socket frame)
+   places at-goal spawns relative to the seat, and ``at_goal_depth_range = [0.0, 0.01316]`` keeps the
+   same absolute 1.84–15 mm span. The keypoint, observations, reward and success metric are unchanged.
+   Task-space runs also use 128-step rollouts, so ``anneal_end_iter = 2000`` with
+   ``num_steps_per_env = 128`` (the same 256k environment steps as 500 x 512).
+
 .. figure:: ../_static/images/displayport/dp_tb_episode_termination.png
    :align: center
 
@@ -750,11 +763,14 @@ Defined in ``config/displayport_rizon_4s/agents/rsl_rl_ppo_cfg.py``.
      - Default
      - Effect
    * - ``max_iterations``
-     - ``1500``
-     - Total training iterations. Extend if success rate is still climbing at the end.
+     - ``1500`` (task-space: ``6000``)
+     - Total training iterations. Extend if success rate is still climbing at the end. Task-space runs
+       use 4x more, shorter iterations for the same sample budget.
    * - ``num_steps_per_env``
-     - ``512``
+     - ``512`` (task-space: ``128``)
      - Rollout length per iteration. Affects curriculum annealing rate (tied to ``anneal_end_iter``).
+       rsl_rl pads every trajectory fragment to this length for the recurrent update, so update memory
+       grows with its square; 128 steps still contains a full insertion (~20 control steps) six times.
    * - ``learning_rate``
      - ``5e-4``
      - PPO learning rate. Reduce if training is unstable; increase if learning is very slow.
@@ -927,7 +943,7 @@ not intend to deploy.
 - ``--video_interval 76800``: Records a video every 76,800 environment steps (~every 150 iterations with 512 steps/env)
 - ``--distributed``: Required when launching under ``torch.distributed.run``
 
-Training uses a recurrent PPO agent (LSTM, 1500 max iterations, 512 steps per environment). Videos are saved under ``logs/``.
+Training uses a recurrent PPO agent (LSTM; joint-space 1500 max iterations x 512 steps per environment, task-space 6000 x 128). Videos are saved under ``logs/``.
 
 .. note::
 

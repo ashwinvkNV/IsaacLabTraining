@@ -59,6 +59,11 @@ class DisplayportInsertionEnv(ManagerBasedRLEnv):
         if per_1024 is not None and hasattr(cfg.sim.physics, "gpu_collision_stack_size"):
             stack = max(int(cfg.physx_collision_stack_min_bytes), -(-int(per_1024) * cfg.scene.num_envs // 1024))
             cfg.sim.physics.gpu_collision_stack_size = -(-stack // 2**20) * 2**20  # round up to whole MiB
+        per_env_patches = getattr(cfg, "physx_rigid_patches_per_env", None)
+        if per_env_patches is not None and hasattr(cfg.sim.physics, "gpu_max_rigid_patch_count"):
+            cfg.sim.physics.gpu_max_rigid_patch_count = max(
+                int(cfg.sim.physics.gpu_max_rigid_patch_count), int(per_env_patches) * cfg.scene.num_envs
+            )
         super().__init__(cfg, render_mode=render_mode, **kwargs)
 
         self._log_success_metrics: bool = bool(getattr(cfg, "log_success_metrics", True))

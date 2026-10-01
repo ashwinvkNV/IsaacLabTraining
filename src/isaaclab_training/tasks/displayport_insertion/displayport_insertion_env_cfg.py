@@ -331,6 +331,9 @@ class DisplayportInsertionEnvCfg(ManagerBasedRLEnvCfg):
     # Set to None to keep ``sim.physics.gpu_collision_stack_size`` as configured.
     physx_collision_stack_bytes_per_1024_envs: int | None = 2**28
     physx_collision_stack_min_bytes: int = 2**27
+    # Contact-patch buffer per env, also applied at env creation (floor: ``sim.physics.gpu_max_rigid_patch_count``).
+    # PhysX needed ~15 patches per env under heavy contact (overflowed 163840 at 12288 envs).
+    physx_rigid_patches_per_env: int | None = 32
 
     sim: SimulationCfg = SimulationCfg(
         physics_material=sim_utils.RigidBodyMaterialCfg(

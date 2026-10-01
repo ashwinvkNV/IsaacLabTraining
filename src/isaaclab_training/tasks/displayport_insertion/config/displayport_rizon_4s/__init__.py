@@ -19,17 +19,20 @@ from . import agents
 
 _INSERTION_ENV_ENTRY = "isaaclab_training.tasks.displayport_insertion.insertion_env:DisplayportInsertionEnv"
 _AGENT = f"{agents.__name__}.rsl_rl_ppo_cfg:Rizon4sGravDisplayportInsertionRNNPPORunnerCfg"
+# Task-space tasks use 128-step rollouts (same sample budget, see rsl_rl_ppo_cfg.py).
+_AGENT_TASK_SPACE = f"{agents.__name__}.rsl_rl_ppo_cfg:Rizon4sGravDisplayportInsertionTaskSpaceRNNPPORunnerCfg"
 
 
 def _register(task_id: str, env_cfg_entry_point: str) -> None:
     """Register one Rizon4s DisplayPort task."""
+    agent = _AGENT_TASK_SPACE if ".task_space_" in env_cfg_entry_point else _AGENT
     gym.register(
         id=task_id,
         entry_point=_INSERTION_ENV_ENTRY,
         disable_env_checker=True,
         kwargs={
             "env_cfg_entry_point": env_cfg_entry_point,
-            "rsl_rl_cfg_entry_point": _AGENT,
+            "rsl_rl_cfg_entry_point": agent,
             "default_agent": "rsl_rl",
         },
     )

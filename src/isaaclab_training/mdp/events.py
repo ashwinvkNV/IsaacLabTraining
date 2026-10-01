@@ -812,6 +812,12 @@ class reset_plug_at_goal_curriculum(ManagerTermBase):
 
         self.insertion_length: float = cfg.params.get("insertion_length", 0.02)
 
+        # Socket-frame offset [m] from the socket keypoint (reward/observation goal) to the pose the
+        # plug physically rests at when fully seated. At-goal spawns are placed relative to this seat
+        # so they never start interpenetrating the socket; the keypoint itself is left unchanged.
+        seat_offset = cfg.params.get("at_goal_seat_offset", [0.0, 0.0, 0.0])
+        self.at_goal_seat_offset = torch.tensor(seat_offset, device=env.device, dtype=torch.float32)
+
         # Optional depth ranges along the insertion axis, measured from the socket keypoint origin.
         self.at_goal_depth_range = cfg.params.get("at_goal_depth_range", None)
         self.approach_depth_range = cfg.params.get("approach_depth_range", None)
@@ -864,6 +870,7 @@ class reset_plug_at_goal_curriculum(ManagerTermBase):
         num_steps_per_env: int | None = None,
         at_goal_depth_range: list | None = None,
         approach_depth_range: list | None = None,
+        at_goal_seat_offset: list | None = None,
     ):
         num_envs = len(env_ids)
 
@@ -882,6 +889,8 @@ class reset_plug_at_goal_curriculum(ManagerTermBase):
 
         # Insertion axis in world frame (rotated by socket orientation)
         insertion_axis_w = math_utils.quat_apply(socket_quat, self.insertion_axis.unsqueeze(0).expand(num_envs, -1))
+        # Physical seat offset in world frame (applied to at-goal spawns only)
+        seat_offset_w = math_utils.quat_apply(socket_quat, self.at_goal_seat_offset.unsqueeze(0).expand(num_envs, -1))
 
         # Goal plug orientation in world frame
         goal_quat_w = math_utils.quat_mul(socket_quat, self.goal_rot.unsqueeze(0).expand(num_envs, -1))
@@ -917,6 +926,7 @@ class reset_plug_at_goal_curriculum(ManagerTermBase):
                     depth_rand = torch.rand(num_at_goal, 1, device=env.device)
                     goal_kp_pos = (
                         kp_origin_w[at_goal_local]
+                        + seat_offset_w[at_goal_local]
                         + depth_rand * insertion_axis_w[at_goal_local] * self.insertion_length
                     )
 
@@ -943,7 +953,8 @@ class reset_plug_at_goal_curriculum(ManagerTermBase):
                 rand_pos[:, i] = torch.empty(num_envs, device=env.device).uniform_(rng[0], rng[1])
             rand_pos[at_goal_mask] = 0.0
 
-            goal_kp_pos = kp_origin_w + depth.unsqueeze(-1) * insertion_axis_w
+            seat = torch.where(at_goal_mask.unsqueeze(-1), seat_offset_w, torch.zeros_like(seat_offset_w))
+            goal_kp_pos = kp_origin_w + seat + depth.unsqueeze(-1) * insertion_axis_w
             plug_pos = goal_kp_pos - plug_kp_in_world + rand_pos
             plug_quat = goal_quat_w.clone()
 

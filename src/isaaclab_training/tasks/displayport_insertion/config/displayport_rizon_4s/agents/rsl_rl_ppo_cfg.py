@@ -8,11 +8,16 @@ from isaaclab.utils.configclass import configclass
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticRecurrentCfg, RslRlPpoAlgorithmCfg
 
 
+_NUM_STEPS_PER_ENV = 512
+_MAX_ITERATIONS = 1500
+_SAVE_INTERVAL = 50
+
+
 @configclass
 class Rizon4sGravDisplayportInsertionRNNPPORunnerCfg(RslRlOnPolicyRunnerCfg):
-    num_steps_per_env = 512
-    max_iterations = 1500
-    save_interval = 50
+    num_steps_per_env = _NUM_STEPS_PER_ENV
+    max_iterations = _MAX_ITERATIONS
+    save_interval = _SAVE_INTERVAL
     experiment_name = "displayport_insertion_rizon4s"
     clip_actions = 1.0
     resume = False
@@ -47,3 +52,22 @@ class Rizon4sGravDisplayportInsertionRNNPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         desired_kl=0.008,
         max_grad_norm=1.0,
     )
+
+
+# Rollout length for the task-space tasks. 128 steps fits a full insertion (~20 control
+# steps for a converged policy) six times, and with 4x shorter rollouts the PPO update pads
+# every trajectory fragment to 128 instead of 512 steps (LSTM update memory ~13x lower).
+TASK_SPACE_NUM_STEPS_PER_ENV = 128
+
+# Factor by which iteration-based settings are scaled so a run covers the same number of
+# environment steps (and, at a fixed num_envs, the same number of samples) as before.
+_TASK_SPACE_ITER_SCALE = _NUM_STEPS_PER_ENV // TASK_SPACE_NUM_STEPS_PER_ENV
+
+
+@configclass
+class Rizon4sGravDisplayportInsertionTaskSpaceRNNPPORunnerCfg(Rizon4sGravDisplayportInsertionRNNPPORunnerCfg):
+    """Task-space runner: 128-step rollouts with the same sample budget as the 512-step base."""
+
+    num_steps_per_env = TASK_SPACE_NUM_STEPS_PER_ENV
+    max_iterations = _MAX_ITERATIONS * _TASK_SPACE_ITER_SCALE
+    save_interval = _SAVE_INTERVAL * _TASK_SPACE_ITER_SCALE

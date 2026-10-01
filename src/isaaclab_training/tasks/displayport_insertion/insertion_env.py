@@ -53,6 +53,12 @@ class DisplayportInsertionEnv(ManagerBasedRLEnv):
     """
 
     def __init__(self, cfg, render_mode: str | None = None, **kwargs):
+        # Size the PhysX collision stack to the final env count (``--num_envs`` is applied after the
+        # cfg is built). Buffer capacity only: contacts are identical as long as PhysX does not overflow.
+        per_1024 = getattr(cfg, "physx_collision_stack_bytes_per_1024_envs", None)
+        if per_1024 is not None and hasattr(cfg.sim.physics, "gpu_collision_stack_size"):
+            stack = max(int(cfg.physx_collision_stack_min_bytes), -(-int(per_1024) * cfg.scene.num_envs // 1024))
+            cfg.sim.physics.gpu_collision_stack_size = -(-stack // 2**20) * 2**20  # round up to whole MiB
         super().__init__(cfg, render_mode=render_mode, **kwargs)
 
         self._log_success_metrics: bool = bool(getattr(cfg, "log_success_metrics", True))

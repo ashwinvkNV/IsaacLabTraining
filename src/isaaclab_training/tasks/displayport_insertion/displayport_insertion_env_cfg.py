@@ -323,6 +323,13 @@ class DisplayportInsertionEnvCfg(ManagerBasedRLEnvCfg):
     success_socket_offset: list = MISSING
     success_plug_offset: list = MISSING
     success_plug_goal_rot_inv: list = MISSING
+
+    # PhysX collision stack per 1024 envs [bytes] and its floor; applied at env creation so it follows
+    # ``--num_envs`` (PhysX needed up to ~115 MiB per 1024 envs; it allocates ~3.6x the nominal size).
+    # Set to None to keep ``sim.physics.gpu_collision_stack_size`` as configured.
+    physx_collision_stack_bytes_per_1024_envs: int | None = 2**28
+    physx_collision_stack_min_bytes: int = 2**27
+
     sim: SimulationCfg = SimulationCfg(
         physics_material=sim_utils.RigidBodyMaterialCfg(
             friction_combine_mode="multiply",
@@ -335,9 +342,14 @@ class DisplayportInsertionEnvCfg(ManagerBasedRLEnvCfg):
             bounce_threshold_velocity=0.2,
             friction_offset_threshold=0.01,
             friction_correlation_distance=0.00625,
-            gpu_collision_stack_size=2**30,
-            gpu_max_rigid_contact_count=2**23,
-            gpu_max_rigid_patch_count=2**23,
+            # Buffers sized to measured need (no PhysX overflow at 1024 and 4096 envs under heavy
+            # contact). The collision stack is scaled with num_envs at env creation, see
+            # ``physx_collision_stack_bytes_per_1024_envs``. Old values: stack 2**30, contacts and
+            # patches 2**23, lost aggregate pairs 2**25 (~5.3 GiB more GPU memory at 1024 envs).
+            gpu_collision_stack_size=2**28,
+            gpu_max_rigid_contact_count=2**20,
+            gpu_max_rigid_patch_count=5 * 2**15,
+            gpu_found_lost_aggregate_pairs_capacity=2**20,
         ),
     )
 

@@ -31,6 +31,7 @@ from isaaclab_training.tasks.displayport_insertion.displayport_insertion_env_cfg
     DisplayportInsertionEnvCfg,
 )
 
+from .agents.rsl_rl_ppo_cfg import TASK_SPACE_NUM_STEPS_PER_ENV
 from .joint_pos_env_cfg import (
     _PLUG_ROOT,
     _PLUG_ROT,
@@ -62,6 +63,19 @@ _ACTION_SCALE = 0.025
 
 # DisplayPort blade engagement along the insertion axis at the seated pose [m].
 _INSERTION_LENGTH = 0.011
+
+# Physical seat of the plug relative to the socket keypoint, in the socket frame [m]
+# (+X = out of the socket along the insertion axis, Z = wide lateral axis). Measured in sim:
+# a free plug rests 1.84 mm above the keypoint and 0.45-0.80 mm towards -Z; the collision
+# meshes overlap by only the 0.15 mm rest-offset allowance there (vs 1.77 mm at the keypoint).
+# At-goal spawns are placed relative to this seat so they never start interpenetrating.
+_SEAT_OFFSET = [0.00184, 0.0, -0.0006]
+
+# Shallowest at-goal spawn along the insertion axis, measured from the socket keypoint [m].
+_AT_GOAL_MAX_DEPTH = 0.015
+
+# At-goal anneal length, in env steps, kept identical to the original 500 iterations x 512 steps.
+_AT_GOAL_ANNEAL_ENV_STEPS = 500 * 512
 
 # Gripper tool-center-point (TCP) offset from the flange body, in the flange's local
 # frame [m]. The policy observes the TCP pose (where the plug is held), not the raw
@@ -203,7 +217,9 @@ class TaskSpaceEventCfg:
     # At-goal reset curriculum: a fraction ``at_goal_prob`` of envs spawn the plug
     # already inserted at a random depth with goal orientation; the rest start from a
     # uniformly randomized approach pose. ``at_goal_prob`` anneals linearly from 0.8 to
-    # 0.0 over the first 500 iterations so the policy learns the full approach.
+    # 0.0 over the first 256k env steps (500 iterations at 512 steps, 2000 at 128) so the
+    # policy learns the full approach. At-goal depths are measured from the physical seat
+    # (``at_goal_seat_offset``) and span the same absolute 1.84-15 mm range as before.
     reset_plug_curriculum = EventTerm(
         func=mdp.reset_plug_at_goal_curriculum,
         mode="reset",
@@ -213,11 +229,12 @@ class TaskSpaceEventCfg:
             "at_goal_prob": 0.8,
             "at_goal_prob_final": 0.0,
             "anneal_start_iter": 0.0,
-            "anneal_end_iter": 500.0,
-            "num_steps_per_env": 512,
+            "anneal_end_iter": _AT_GOAL_ANNEAL_ENV_STEPS / TASK_SPACE_NUM_STEPS_PER_ENV,
+            "num_steps_per_env": TASK_SPACE_NUM_STEPS_PER_ENV,
             "insertion_axis": [1.0, 0.0, 0.0],
             "insertion_length": _INSERTION_LENGTH,
-            "at_goal_depth_range": [0.0, 0.015],
+            "at_goal_depth_range": [0.0, _AT_GOAL_MAX_DEPTH - _SEAT_OFFSET[0]],
+            "at_goal_seat_offset": _SEAT_OFFSET,
             "approach_depth_range": [0.02, 0.06],
             "socket_insertion_offset": SOCKET_INSERTION_OFFSET,
             "plug_insertion_offset": PLUG_INSERTION_OFFSET,
@@ -418,7 +435,12 @@ class Rizon4sTaskSpaceDisplayportInsertionEnvCfg(DisplayportInsertionEnvCfg):
         self.events.set_robot_to_grasp_pose.params["grasp_rot_offset"] = self.grasp_rot_offset
         self.events.set_robot_to_grasp_pose.params["grasp_offset"] = self.grasp_offset
         self.events.set_robot_to_grasp_pose.params["gripper_joint_setter_func"] = self.gripper_joint_setter_func
-        self.events.set_robot_to_grasp_pose.params["max_iterations"] = 150
+        # Reset IK: DLS reaches ~3 um in ~5 iterations; the float32 world-coordinate floor is
+        # up to ~15 um for envs far from the origin, so 1e-6 is never met and all iterations ran.
+        # 1e-5 exits after 5-6 iterations (<= 11 um); 50 caps the rare floor-limited reset batch.
+        self.events.set_robot_to_grasp_pose.params["pos_threshold"] = 1e-5
+        self.events.set_robot_to_grasp_pose.params["rot_threshold"] = 1e-5
+        self.events.set_robot_to_grasp_pose.params["max_iterations"] = 50
 
         # Wire termination params.
         self.terminations.plug_dropped.params["end_effector_body_name"] = self.end_effector_body_name

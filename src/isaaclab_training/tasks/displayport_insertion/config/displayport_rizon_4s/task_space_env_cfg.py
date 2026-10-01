@@ -451,7 +451,7 @@ class Rizon4sTaskSpaceDisplayportInsertionEnvCfg(DisplayportInsertionEnvCfg):
         for asset in (self.scene.dp_plug, self.scene.dp_socket):
             asset.spawn.rigid_props.solver_position_iteration_count = _PLUG_SOCKET_SOLVER_POSITION_ITERATIONS
             # Disabled colliders take no part in contact; dropping them saves PhysX parsing/cooking per env.
-            asset.spawn.deactivate_disabled_colliders = True
+            asset.spawn.remove_disabled_colliders = True
         # The plug's mass properties are pinned to what the disabled shapes produced. The socket is kinematic,
         # so its mass properties (which shift slightly without its disabled SDF) do not enter the dynamics.
         self.scene.dp_plug.spawn.center_of_mass = _PLUG_CENTER_OF_MASS
@@ -461,10 +461,10 @@ class Rizon4sTaskSpaceDisplayportInsertionEnvCfg(DisplayportInsertionEnvCfg):
         if _USE_PLUG_CASING_HULL:
             self.scene.dp_plug.spawn.collision_parts_file = _PLUG_COLLISION_PARTS
             self.scene.dp_plug.spawn.collision_parts_template = "collision_mesh"
-            self.scene.dp_plug.spawn.deactivate_colliders = ("collision_mesh",)
+            self.scene.dp_plug.spawn.remove_colliders = ("collision_mesh",)
         self.scene.dp_socket.spawn.collision_parts_file = _SOCKET_COLLISION_PARTS
         self.scene.dp_socket.spawn.collision_parts_template = _SOCKET_BODY8_COLLIDER
-        self.scene.dp_socket.spawn.deactivate_colliders = (_SOCKET_BODY8_COLLIDER,)
+        self.scene.dp_socket.spawn.remove_colliders = (_SOCKET_BODY8_COLLIDER,)
 
         # ----- Workspace poses -----
         self.scene.dp_socket.init_state = RigidObjectCfg.InitialStateCfg(pos=_SOCKET_ROOT, rot=_SOCKET_ROT)

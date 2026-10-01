@@ -26,6 +26,14 @@ _COPIED_ATTR_PREFIXES = ("physxCollision:", "physics:collisionEnabled")
 _SDF_ATTR_PREFIX = "physxSDFMeshCollision:"
 
 
+def _strip_collision(prim: Usd.Prim) -> None:
+    """Remove every collision schema from ``prim`` so PhysX creates no shape for it; the prim stays active,
+    so a mesh that is also render geometry remains visible."""
+    for schema in prim.GetAppliedSchemas():
+        if "Collision" in schema:
+            prim.RemoveAppliedSchema(schema)
+
+
 def _add_collision_part(root: Usd.Prim, name: str, vertices, faces, kind: str, template: Usd.Prim) -> Usd.Prim:
     """Author a mesh collider under ``root`` (rigid-body frame) with collision settings copied from ``template``."""
     stage = root.GetStage()
@@ -103,18 +111,18 @@ def spawn_usd_with_mass_override(
         for name in data["names"]:
             name = str(name)
             _add_collision_part(prim, name, data[f"{name}_v"], data[f"{name}_f"], str(data[f"{name}_kind"]), template)
-        for rel_path in cfg.deactivate_colliders:
+        for rel_path in cfg.remove_colliders:
             target = prim.GetStage().GetPrimAtPath(prim.GetPath().AppendPath(rel_path))
             if not target.IsValid():
-                raise ValueError(f"deactivate_colliders entry '{rel_path}' not found under {prim.GetPath()}")
-            target.SetActive(False)
+                raise ValueError(f"remove_colliders entry '{rel_path}' not found under {prim.GetPath()}")
+            _strip_collision(target)
 
-    if cfg.deactivate_disabled_colliders:
+    if cfg.remove_disabled_colliders:
         disabled = []
         for child in Usd.PrimRange(prim):
             attr = child.GetAttribute("physics:collisionEnabled")
             if attr and attr.HasAuthoredValue() and attr.Get() is False:
                 disabled.append(child)
         for child in disabled:
-            child.SetActive(False)
+            _strip_collision(child)
     return prim

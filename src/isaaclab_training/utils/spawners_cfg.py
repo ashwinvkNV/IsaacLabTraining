@@ -22,11 +22,12 @@ class UsdFileWithMassOverrideCfg(UsdFileCfg):
 
     func: Callable | str = "isaaclab_training.utils.spawners:spawn_usd_with_mass_override"
 
-    deactivate_disabled_colliders: bool = False
-    """Deactivate collider prims with ``physics:collisionEnabled = False`` before cloning.
+    remove_disabled_colliders: bool = False
+    """Strip the collision schemas from prims with ``physics:collisionEnabled = False`` before cloning.
 
-    PhysX includes such shapes when it derives the centre of mass and inertia, so on a dynamic body
-    set the explicit mass properties below as well to keep its dynamics unchanged.
+    The prims stay active, so meshes that double as render geometry remain visible. PhysX includes
+    such shapes when it derives the centre of mass and inertia, so on a dynamic body set the explicit
+    mass properties below as well to keep its dynamics unchanged.
     """
 
     center_of_mass: tuple[float, float, float] | None = None
@@ -47,5 +48,7 @@ class UsdFileWithMassOverrideCfg(UsdFileCfg):
     """Collider prim (path relative to the asset root) whose applied schemas, PhysX collision / SDF
     settings and physics material are copied onto the replacement parts."""
 
-    deactivate_colliders: tuple[str, ...] = ()
-    """Collider prims (paths relative to the asset root) replaced by :attr:`collision_parts_file`."""
+    remove_colliders: tuple[str, ...] = ()
+    """Collider prims (paths relative to the asset root) replaced by :attr:`collision_parts_file`.
+
+    Their collision schemas are stripped; the prims stay active so render geometry is kept."""

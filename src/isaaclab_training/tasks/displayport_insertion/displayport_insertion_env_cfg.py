@@ -29,6 +29,8 @@ from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.sim.simulation_cfg import SimulationCfg
+
+from isaaclab_training.utils.spawners_cfg import UsdFileWithMassOverrideCfg
 from isaaclab.utils.configclass import configclass
 from isaaclab.utils.noise import UniformNoiseCfg
 
@@ -136,7 +138,7 @@ class DisplayportInsertionSceneCfg(InteractiveSceneCfg):
     # DisplayPort right-angle plug (held asset) - dynamic.
     dp_plug = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/DisplayPortPlug",
-        spawn=sim_utils.UsdFileCfg(
+        spawn=UsdFileWithMassOverrideCfg(
             usd_path=f"{DISPLAY_ASSETS_DIR}/displayport_plug.usd",
             scale=(1.0, 1.0, 1.0),
             activate_contact_sensors=True,
@@ -162,7 +164,7 @@ class DisplayportInsertionSceneCfg(InteractiveSceneCfg):
     # DisplayPort socket (fixed asset) - kinematic.
     dp_socket = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/DisplayPortSocket",
-        spawn=sim_utils.UsdFileCfg(
+        spawn=UsdFileWithMassOverrideCfg(
             usd_path=f"{DISPLAY_ASSETS_DIR}/displayport_socket_no_protrusions.usd",
             scale=(1.0, 1.0, 1.0),
             activate_contact_sensors=False,

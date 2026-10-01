@@ -77,6 +77,18 @@ _AT_GOAL_MAX_DEPTH = 0.015
 # At-goal anneal length, in env steps, kept identical to the original 500 iterations x 512 steps.
 _AT_GOAL_ANNEAL_ENV_STEPS = 500 * 512
 
+# Plug/socket solver position iterations. PhysX GPU runs the highest count in the scene for every body,
+# so this sets the solver cost of the whole scene (128 -> 64: ~45 % less PhysX time per step).
+_PLUG_SOCKET_SOLVER_POSITION_ITERATIONS = 64
+
+# Plug mass properties exactly as PhysX derives them from the asset's collision shapes (including the
+# disabled convex decompositions), measured with the PhysX rigid-body view: centre of mass [m] in the plug
+# body frame, principal axes (w, x, y, z) and principal moments [kg m^2] for the 0.03 kg plug. Authoring
+# them lets the disabled colliders be dropped without changing the plug's dynamics.
+_PLUG_CENTER_OF_MASS = (0.0029111250769346952, 0.0008471199544146657, 0.015430336818099022)
+_PLUG_PRINCIPAL_AXES_WXYZ = (0.9291425943374634, -0.013500147499144077, -0.3694750964641571, 1.6308516933349892e-05)
+_PLUG_DIAGONAL_INERTIA = (3.6660012307437196e-06, 4.999659500369078e-06, 1.6410003934466692e-06)
+
 # Gripper tool-center-point (TCP) offset from the flange body, in the flange's local
 # frame [m]. The policy observes the TCP pose (where the plug is held), not the raw
 # flange; the TCP shares the flange orientation, so only the position is offset.
@@ -419,6 +431,17 @@ class Rizon4sTaskSpaceDisplayportInsertionEnvCfg(DisplayportInsertionEnvCfg):
             stiffness=0.0,
             damping=0.0,
         )
+
+        # ----- Plug / socket physics -----
+        for asset in (self.scene.dp_plug, self.scene.dp_socket):
+            asset.spawn.rigid_props.solver_position_iteration_count = _PLUG_SOCKET_SOLVER_POSITION_ITERATIONS
+            # Disabled colliders take no part in contact; dropping them saves PhysX parsing/cooking per env.
+            asset.spawn.deactivate_disabled_colliders = True
+        # The plug's mass properties are pinned to what the disabled shapes produced. The socket is kinematic,
+        # so its mass properties (which shift slightly without its disabled SDF) do not enter the dynamics.
+        self.scene.dp_plug.spawn.center_of_mass = _PLUG_CENTER_OF_MASS
+        self.scene.dp_plug.spawn.principal_axes_wxyz = _PLUG_PRINCIPAL_AXES_WXYZ
+        self.scene.dp_plug.spawn.diagonal_inertia = _PLUG_DIAGONAL_INERTIA
 
         # ----- Workspace poses -----
         self.scene.dp_socket.init_state = RigidObjectCfg.InitialStateCfg(pos=_SOCKET_ROOT, rot=_SOCKET_ROT)

@@ -37,3 +37,15 @@ class UsdFileWithMassOverrideCfg(UsdFileCfg):
 
     diagonal_inertia: tuple[float, float, float] | None = None
     """Principal moments of inertia [kg m^2] about :attr:`principal_axes_wxyz`."""
+
+    collision_parts_file: str | None = None
+    """``.npz`` with replacement collision parts in the rigid-body frame: ``names`` and, per name,
+    ``<name>_v`` (vertices [m]), ``<name>_f`` (triangle indices) and ``<name>_kind`` (``"sdf"`` or
+    ``"convexHull"``, at most 64 vertices). Pin the mass properties when replacing a dynamic body's colliders."""
+
+    collision_parts_template: str | None = None
+    """Collider prim (path relative to the asset root) whose applied schemas, PhysX collision / SDF
+    settings and physics material are copied onto the replacement parts."""
+
+    deactivate_colliders: tuple[str, ...] = ()
+    """Collider prims (paths relative to the asset root) replaced by :attr:`collision_parts_file`."""

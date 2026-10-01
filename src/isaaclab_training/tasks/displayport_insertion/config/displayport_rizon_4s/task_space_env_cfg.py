@@ -10,6 +10,7 @@ reset curriculum. The end-effector pose is commanded as a relative Cartesian del
 """
 
 import math
+import os
 
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
@@ -88,6 +89,20 @@ _PLUG_SOCKET_SOLVER_POSITION_ITERATIONS = 64
 _PLUG_CENTER_OF_MASS = (0.0029111250769346952, 0.0008471199544146657, 0.015430336818099022)
 _PLUG_PRINCIPAL_AXES_WXYZ = (0.9291425943374634, -0.013500147499144077, -0.3694750964641571, 1.6308516933349892e-05)
 _PLUG_DIAGONAL_INERTIA = (3.6660012307437196e-06, 4.999659500369078e-06, 1.6410003934466692e-06)
+
+# Replacement collision geometry (precomputed from the asset meshes, rigid-body frames; see collision/README.md):
+# - socket Body8 (housing), ON: exact SDF for the top 12.5 mm (flange, top face, upper cavity walls -- everything the
+#   plug reaches), one 64-vertex convex hull for the never-contacted lower part (5.3k instead of 43k SDF triangles).
+#   Contact geometry unchanged; ~1 % faster, 6-20 s faster env creation.
+# - plug casing as a 64-vertex convex hull (SDF kept only for the connector), OFF by default: +21-30 % simulation
+#   throughput, but the hull deviates up to 0.16 mm from the curved casing the fingers grip, which shifts the plug
+#   ~0.2 mm / ~0.7 deg in the gripper and jammed 2 of 8 tight-offset scripted insertions that the SDF casing seats.
+#   Opt in with _USE_PLUG_CASING_HULL = True.
+_USE_PLUG_CASING_HULL = False
+_COLLISION_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "collision")
+_PLUG_COLLISION_PARTS = os.path.join(_COLLISION_DIR, "plug_connector_sdf_casing_hull.npz")
+_SOCKET_COLLISION_PARTS = os.path.join(_COLLISION_DIR, "socket_body8_top_sdf_lower_hull.npz")
+_SOCKET_BODY8_COLLIDER = "tn__2584N111_DisplayportCord_jP/Body8/Mesh"
 
 # Gripper tool-center-point (TCP) offset from the flange body, in the flange's local
 # frame [m]. The policy observes the TCP pose (where the plug is held), not the raw
@@ -442,6 +457,14 @@ class Rizon4sTaskSpaceDisplayportInsertionEnvCfg(DisplayportInsertionEnvCfg):
         self.scene.dp_plug.spawn.center_of_mass = _PLUG_CENTER_OF_MASS
         self.scene.dp_plug.spawn.principal_axes_wxyz = _PLUG_PRINCIPAL_AXES_WXYZ
         self.scene.dp_plug.spawn.diagonal_inertia = _PLUG_DIAGONAL_INERTIA
+        # Simplified collision geometry where it does not mate (mass properties above stay pinned).
+        if _USE_PLUG_CASING_HULL:
+            self.scene.dp_plug.spawn.collision_parts_file = _PLUG_COLLISION_PARTS
+            self.scene.dp_plug.spawn.collision_parts_template = "collision_mesh"
+            self.scene.dp_plug.spawn.deactivate_colliders = ("collision_mesh",)
+        self.scene.dp_socket.spawn.collision_parts_file = _SOCKET_COLLISION_PARTS
+        self.scene.dp_socket.spawn.collision_parts_template = _SOCKET_BODY8_COLLIDER
+        self.scene.dp_socket.spawn.deactivate_colliders = (_SOCKET_BODY8_COLLIDER,)
 
         # ----- Workspace poses -----
         self.scene.dp_socket.init_state = RigidObjectCfg.InitialStateCfg(pos=_SOCKET_ROOT, rot=_SOCKET_ROT)

@@ -682,6 +682,13 @@ If ``Metrics/success_rate`` is high early but collapses after iteration ~500, th
    Task-space runs also use 128-step rollouts, so ``anneal_end_iter = 2000`` with
    ``num_steps_per_env = 128`` (the same 256k environment steps as 500 x 512).
 
+   Task-space physics: plug and socket use 64 solver position iterations (PhysX GPU applies the scene
+   maximum to every body; 128 cost ~45 % more simulation time with the same steady-contact behaviour), the
+   plug's mass properties are pinned so its disabled convex-decomposition colliders can be dropped, and the
+   socket housing (Body8) keeps exact SDF only for the top 12.5 mm the plug can reach, plus one convex hull
+   for the rest. An opt-in plug casing hull (+21-30 % throughput, ~0.2 mm / 0.7 deg grasp shift) is described in
+   ``tasks/displayport_insertion/collision/README.md``.
+
 .. figure:: ../_static/images/displayport/dp_tb_episode_termination.png
    :align: center
 

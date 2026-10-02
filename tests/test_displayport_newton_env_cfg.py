@@ -32,6 +32,7 @@ from isaaclab_training.mdp import events as deploy_events
 from isaaclab_training.mdp.actions import _pose_rel_action_extra
 from isaaclab_training.mdp.events import (
     _body_link_jacobian_for_ik,
+    _curriculum_goal_keypoint_positions,
     reset_plug_at_goal_curriculum,
     set_robot_to_object_grasp_pose,
 )
@@ -49,6 +50,7 @@ from isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s i
 from isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s.agents.rsl_rl_ppo_cfg import (
     Rizon4sGravDisplayportInsertionNewtonRNNPPORunnerCfg,
     Rizon4sGravDisplayportInsertionRNNPPORunnerCfg,
+    Rizon4sGravDisplayportInsertionTaskSpaceRNNPPORunnerCfg,
 )
 from isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s.joint_pos_env_cfg import (
     set_finger_joint_pos_grav,
@@ -85,6 +87,43 @@ _AGENT_MODULE = f"{_CFG_PACKAGE}.agents.rsl_rl_ppo_cfg"
 def _observation_term_names(group: object) -> list[str]:
     """Return observation terms in their concatenation order."""
     return [field.name for field in fields(group) if isinstance(getattr(group, field.name), ObservationTermCfg)]
+
+
+def test_displayport_curriculum_composes_physical_seat_in_socket_frame() -> None:
+    """Only at-goal rows receive the socket-local physical-seat offset."""
+    keypoint_origin = torch.tensor(
+        [
+            [1.0, 2.0, 3.0],
+            [4.0, 5.0, 6.0],
+            [7.0, 8.0, 9.0],
+        ]
+    )
+    socket_quat = torch.tensor(
+        [
+            [0.0, 0.0, 0.0, 1.0],
+            [0.0, 0.0, math.sqrt(0.5), math.sqrt(0.5)],
+            [0.0, 0.0, math.sqrt(0.5), math.sqrt(0.5)],
+        ]
+    )
+    insertion_axis = torch.tensor([1.0, 0.0, 0.0])
+    depth = torch.tensor([0.0, 0.02, 0.02])
+    at_goal_mask = torch.tensor([True, True, False])
+    seat_offset = torch.tensor([0.00184, 0.0, -0.0006])
+
+    result = _curriculum_goal_keypoint_positions(
+        keypoint_origin,
+        socket_quat,
+        insertion_axis,
+        depth,
+        at_goal_mask,
+        seat_offset,
+    )
+
+    torch.testing.assert_close(result[0], torch.tensor([1.00184, 2.0, 2.9994]), atol=1.0e-7, rtol=0.0)
+    # The rotated at-goal row must rotate both the local +X depth and seat offset.
+    torch.testing.assert_close(result[1], torch.tensor([4.0, 5.02184, 5.9994]), atol=1.0e-7, rtol=0.0)
+    # The approach row uses the same rotated insertion axis without the seat offset.
+    torch.testing.assert_close(result[2], torch.tensor([7.0, 8.02, 9.0]), atol=1.0e-7, rtol=0.0)
 
 
 @pytest.mark.parametrize(
@@ -499,15 +538,15 @@ def test_displayport_newton_tasks_route_to_dedicated_configs():
         ),
         "IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace": (
             f"{_CFG_PACKAGE}.task_space_env_cfg:Rizon4sTaskSpaceDisplayportInsertionEnvCfg",
-            f"{_AGENT_MODULE}:Rizon4sGravDisplayportInsertionRNNPPORunnerCfg",
+            f"{_AGENT_MODULE}:Rizon4sGravDisplayportInsertionTaskSpaceRNNPPORunnerCfg",
         ),
         "IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Play": (
             f"{_CFG_PACKAGE}.task_space_env_cfg:Rizon4sTaskSpaceDisplayportInsertionEnvCfg_PLAY",
-            f"{_AGENT_MODULE}:Rizon4sGravDisplayportInsertionRNNPPORunnerCfg",
+            f"{_AGENT_MODULE}:Rizon4sGravDisplayportInsertionTaskSpaceRNNPPORunnerCfg",
         ),
         "IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference": (
             f"{_CFG_PACKAGE}.task_space_ros_inference_env_cfg:Rizon4sTaskSpaceDisplayportInsertionROSInferenceEnvCfg",
-            f"{_AGENT_MODULE}:Rizon4sGravDisplayportInsertionRNNPPORunnerCfg",
+            f"{_AGENT_MODULE}:Rizon4sGravDisplayportInsertionTaskSpaceRNNPPORunnerCfg",
         ),
     }
 
@@ -733,6 +772,9 @@ def test_displayport_newton_observation_abi_noise_and_deployment_metadata():
     assert ros_cfg.fixed_asset_init_pos_range == pytest.approx([0.01, 0.01, 0.02])
     assert ros_cfg.fixed_asset_init_orn_deg_range == pytest.approx([2.0, 2.0, 2.0])
     assert ros_cfg.fixed_asset_pos_obs_noise_level == pytest.approx([0.01, 0.01, 0.01])
+    assert ros_cfg.events.set_robot_to_grasp_pose.params["pos_threshold"] == pytest.approx(1.0e-5)
+    assert ros_cfg.events.set_robot_to_grasp_pose.params["rot_threshold"] == pytest.approx(1.0e-5)
+    assert ros_cfg.events.set_robot_to_grasp_pose.params["max_iterations"] == 50
 
 
 def test_physx_task_space_deployment_frame_metadata_remains_explicit():
@@ -787,11 +829,12 @@ def test_displayport_newton_domain_randomization_curriculum_and_rewards():
     assert curriculum["at_goal_prob"] == pytest.approx(0.8)
     assert curriculum["at_goal_prob_final"] == pytest.approx(0.0)
     assert curriculum["anneal_start_iter"] == pytest.approx(0.0)
-    assert curriculum["anneal_end_iter"] == pytest.approx(500.0)
-    assert curriculum["num_steps_per_env"] == 512
+    assert curriculum["anneal_end_iter"] == pytest.approx(2000.0)
+    assert curriculum["num_steps_per_env"] == 128
     assert curriculum["insertion_axis"] == pytest.approx([1.0, 0.0, 0.0])
     assert curriculum["insertion_length"] == pytest.approx(0.011)
-    assert curriculum["at_goal_depth_range"] == pytest.approx([0.0, 0.015])
+    assert curriculum["at_goal_depth_range"] == pytest.approx([0.0, 0.01316])
+    assert curriculum["at_goal_seat_offset"] == pytest.approx([0.00184, 0.0, -0.0006])
     assert curriculum["approach_depth_range"] == pytest.approx([0.02, 0.06])
     assert curriculum["socket_insertion_offset"] == pytest.approx(SOCKET_INSERTION_OFFSET)
     assert curriculum["plug_insertion_offset"] == pytest.approx(PLUG_INSERTION_OFFSET)
@@ -799,6 +842,10 @@ def test_displayport_newton_domain_randomization_curriculum_and_rewards():
     assert curriculum["normal_pose_range"]["x"] == pytest.approx([-0.02, 0.02])
     assert curriculum["normal_pose_range"]["y"] == pytest.approx([-0.02, 0.02])
     assert curriculum["normal_pose_range"]["z"] == pytest.approx([0.0, 0.0])
+    grasp_reset = events.set_robot_to_grasp_pose.params
+    assert grasp_reset["pos_threshold"] == pytest.approx(1.0e-5)
+    assert grasp_reset["rot_threshold"] == pytest.approx(1.0e-5)
+    assert grasp_reset["max_iterations"] == 50
 
     rewards = cfg.rewards
     assert rewards.plug_socket_keypoint_tracking.weight == pytest.approx(-1.5)
@@ -817,19 +864,19 @@ def test_displayport_newton_domain_randomization_curriculum_and_rewards():
     ("iteration", "expected_probability"),
     [
         pytest.param(0, 0.8, id="start"),
-        pytest.param(250, 0.4, id="midpoint"),
-        pytest.param(500, 0.0, id="end"),
-        pytest.param(750, 0.0, id="after-end"),
+        pytest.param(1000, 0.4, id="midpoint"),
+        pytest.param(2000, 0.0, id="end"),
+        pytest.param(3000, 0.0, id="after-end"),
     ],
 )
 def test_displayport_newton_curriculum_anneals_at_goal_probability(iteration: int, expected_probability: float):
-    """The reset curriculum must linearly anneal from 0.8 to zero over 500 iterations."""
+    """The optimized reset curriculum must preserve its 256k environment-step horizon."""
     term = object.__new__(reset_plug_at_goal_curriculum)
     term.at_goal_prob = 0.8
     term.at_goal_prob_final = 0.0
     term.anneal_start_iter = 0.0
-    term.anneal_end_iter = 500.0
-    term.num_steps_per_env = 512
+    term.anneal_end_iter = 2000.0
+    term.num_steps_per_env = 128
     env = SimpleNamespace(common_step_counter=iteration * term.num_steps_per_env)
 
     assert term._current_at_goal_prob(env) == pytest.approx(expected_probability)
@@ -839,12 +886,16 @@ def test_displayport_newton_runner_and_play_preserve_physx_defaults():
     """Newton uses its checkpoint horizon and safe shard size without mutating PhysX defaults."""
     newton_runner = Rizon4sGravDisplayportInsertionNewtonRNNPPORunnerCfg()
     physx_runner = Rizon4sGravDisplayportInsertionRNNPPORunnerCfg()
+    task_space_runner = Rizon4sGravDisplayportInsertionTaskSpaceRNNPPORunnerCfg()
     assert newton_runner.seed == 123
-    assert newton_runner.max_iterations == 1000
+    assert newton_runner.max_iterations == 4000
     assert newton_runner.experiment_name == "displayport_insertion_rizon4s_newton_osc"
     assert physx_runner.max_iterations == 1500
     assert physx_runner.experiment_name == "displayport_insertion_rizon4s"
-    assert newton_runner.num_steps_per_env == physx_runner.num_steps_per_env == 512
+    assert task_space_runner.max_iterations == 6000
+    assert task_space_runner.num_steps_per_env == 128
+    assert newton_runner.num_steps_per_env == 128
+    assert physx_runner.num_steps_per_env == 512
     assert newton_runner.clip_actions == physx_runner.clip_actions == pytest.approx(1.0)
     assert newton_runner.obs_groups == {"actor": ["policy"], "critic": ["critic"]}
     assert physx_runner.obs_groups == {"actor": ["policy"], "critic": ["critic"]}

@@ -8,11 +8,18 @@ from isaaclab.utils.configclass import configclass
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg, RslRlRNNModelCfg
 
 
+_BASE_NUM_STEPS_PER_ENV = 512
+_BASE_MAX_ITERATIONS = 1500
+_BASE_SAVE_INTERVAL = 50
+TASK_SPACE_NUM_STEPS_PER_ENV = 128
+_TASK_SPACE_ITER_SCALE = _BASE_NUM_STEPS_PER_ENV // TASK_SPACE_NUM_STEPS_PER_ENV
+
+
 @configclass
 class Rizon4sGravDisplayportInsertionRNNPPORunnerCfg(RslRlOnPolicyRunnerCfg):
-    num_steps_per_env = 512
-    max_iterations = 1500
-    save_interval = 50
+    num_steps_per_env = _BASE_NUM_STEPS_PER_ENV
+    max_iterations = _BASE_MAX_ITERATIONS
+    save_interval = _BASE_SAVE_INTERVAL
     experiment_name = "displayport_insertion_rizon4s"
     clip_actions = 1.0
     resume = False
@@ -58,9 +65,18 @@ class Rizon4sGravDisplayportInsertionRNNPPORunnerCfg(RslRlOnPolicyRunnerCfg):
 
 
 @configclass
-class Rizon4sGravDisplayportInsertionNewtonRNNPPORunnerCfg(Rizon4sGravDisplayportInsertionRNNPPORunnerCfg):
+class Rizon4sGravDisplayportInsertionTaskSpaceRNNPPORunnerCfg(Rizon4sGravDisplayportInsertionRNNPPORunnerCfg):
+    """Task-space runner with a memory-efficient recurrent rollout."""
+
+    num_steps_per_env = TASK_SPACE_NUM_STEPS_PER_ENV
+    max_iterations = _BASE_MAX_ITERATIONS * _TASK_SPACE_ITER_SCALE
+    save_interval = _BASE_SAVE_INTERVAL * _TASK_SPACE_ITER_SCALE
+
+
+@configclass
+class Rizon4sGravDisplayportInsertionNewtonRNNPPORunnerCfg(Rizon4sGravDisplayportInsertionTaskSpaceRNNPPORunnerCfg):
     """RSL-RL runner for the Newton task-space training profile."""
 
     seed = 123
-    max_iterations = 1000
+    max_iterations = 1000 * _TASK_SPACE_ITER_SCALE
     experiment_name = "displayport_insertion_rizon4s_newton_osc"

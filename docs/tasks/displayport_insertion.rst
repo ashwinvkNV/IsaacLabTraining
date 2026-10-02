@@ -522,10 +522,11 @@ Domain Randomization Strategy
             "at_goal_prob": 0.8,
             "at_goal_prob_final": 0.0,
             "anneal_start_iter": 0.0,
-            "anneal_end_iter": 500.0,
-            "num_steps_per_env": 512,
+            "anneal_end_iter": 2000.0,
+            "num_steps_per_env": 128,
             "insertion_axis": [1.0, 0.0, 0.0],
-            "at_goal_depth_range": [0.0, 0.015],      # 0–15 mm engaged
+            "at_goal_depth_range": [0.0, 0.01316],     # seat to 15 mm from goal keypoint
+            "at_goal_seat_offset": [0.00184, 0.0, -0.0006],
             "approach_depth_range": [0.02, 0.06],     # 20–60 mm approach
             "normal_pose_range": {
                 "x": [-0.02, 0.02],
@@ -535,7 +536,11 @@ Domain Randomization Strategy
         },
     )
 
-At the start of training, 80% of resets place the plug near the inserted pose; this probability linearly anneals to 0% over 500 training iterations, forcing the policy to learn full approach and insertion.
+At the start of task-space training, 80% of resets place the plug between the
+physical seat and the partially inserted pose. The socket-frame seat offset
+prevents those resets from starting inside the collision geometry. The
+probability anneals to 0% over 2,000 iterations of the 128-step rollout, which
+preserves the original 256,000 policy-step horizon per environment.
 
 .. figure:: ../_static/images/displayport/dp_curriculum.png
    :align: center
@@ -657,7 +662,8 @@ If the policy approaches but does not fully seat the plug, try increasing the ex
 Reset Curriculum
 ~~~~~~~~~~~~~~~~
 
-Defined in ``config/displayport_rizon_4s/joint_pos_env_cfg.py`` → ``reset_plug_curriculum``.
+The task-space defaults are defined in
+``config/displayport_rizon_4s/task_space_env_cfg.py`` → ``reset_plug_curriculum``.
 
 .. list-table:: Curriculum hyperparameters
    :widths: 35 20 45
@@ -670,11 +676,14 @@ Defined in ``config/displayport_rizon_4s/joint_pos_env_cfg.py`` → ``reset_plug
      - ``0.8`` → ``0.0``
      - Fraction of resets with plug near full insertion. Higher start values make early learning easier; anneal to zero for full approach behavior.
    * - ``anneal_end_iter``
-     - ``500``
-     - Training iterations over which at-goal probability anneals. Extend (e.g. 800–1000) if success rate drops when curriculum gets harder; shorten if training is too slow to reach approach poses.
+     - ``2000`` with 128-step task-space rollouts
+     - Training iterations over which at-goal probability anneals. Rescale this when rollout length or global environment count changes so the comparison uses the same transition budget.
    * - ``at_goal_depth_range``
-     - ``[0.0, 0.015]`` m
-     - How deep the plug starts when sampled "at goal" (0–15 mm engaged). Narrow for fine final-insertion practice; widen slightly if the policy never sees near-mated contacts.
+     - ``[0.0, 0.01316]`` m from the physical seat
+     - How far the plug starts from the seat along the insertion axis. Together with the seat offset, this covers 1.84–15 mm from the reward keypoint without spawning below the physical seat.
+   * - ``at_goal_seat_offset``
+     - ``[0.00184, 0.0, -0.0006]`` m
+     - Socket-frame displacement from the reward keypoint to the measured physical seat. Revalidate this value if the plug or socket geometry changes.
    * - ``approach_depth_range``
      - ``[0.02, 0.06]`` m
      - Standoff distance when not at goal (20–60 mm). Increase upper bound for harder long-range approach; decrease if the policy struggles to reach the socket mouth.
@@ -682,7 +691,7 @@ Defined in ``config/displayport_rizon_4s/joint_pos_env_cfg.py`` → ``reset_plug
      - ±2 cm lateral
      - Lateral misalignment when not at goal. Widen for more robustness to perception error; narrow if training fails to converge.
 
-If ``Metrics/success_rate`` is high early but collapses after iteration ~500, the curriculum may be annealing too aggressively — extend ``anneal_end_iter`` or raise ``at_goal_prob_final`` temporarily.
+If ``Metrics/success_rate`` is high early but collapses as the curriculum ends, compare runs at equal accumulated transitions before extending ``anneal_end_iter`` or raising ``at_goal_prob_final``.
 
 .. figure:: ../_static/images/displayport/dp_tb_episode_termination.png
    :align: center
@@ -765,11 +774,11 @@ Defined in ``config/displayport_rizon_4s/agents/rsl_rl_ppo_cfg.py``.
      - Default
      - Effect
    * - ``max_iterations``
-     - ``1500``
-     - Total training iterations. Extend if success rate is still climbing at the end.
+     - Joint: ``1500``; PhysX task space: ``6000``; Newton task space: ``4000``
+     - Total training iterations. The task-space values preserve the original sample budgets after shortening each rollout.
    * - ``num_steps_per_env``
-     - ``512``
-     - Rollout length per iteration. Affects curriculum annealing rate (tied to ``anneal_end_iter``).
+     - Joint: ``512``; task space: ``128``
+     - Rollout length per iteration. The shorter task-space rollout reduces recurrent PPO memory; rescale every iteration-based schedule when changing it.
    * - ``learning_rate``
      - ``5e-4``
      - PPO learning rate. Reduce if training is unstable; increase if learning is very slow.
@@ -872,7 +881,7 @@ recommended fixed profile uses the stable Newton 1.6 release with:
    * - Socket observation noise
      - Uniform ±10 mm position error, sampled once and held for the episode
    * - Reset curriculum
-     - At-goal probability annealed from ``0.8`` to ``0`` over iterations 0–500
+     - At-goal probability annealed from ``0.8`` to ``0`` over iterations 0–2,000 of the 128-step rollout
 
 Both the PhysX and Newton configurations inherit Isaac Lab's stock nominal Rizon 4s with Grav USD. The stock
 flange is a mass-only marker with zero authored inertia. Before Newton imports the scene, the task authors the same
@@ -1077,10 +1086,13 @@ not intend to deploy.
 - ``--viz none``: Disables all visualizers for throughput (the unified entry point has no ``--headless`` flag;
   pass ``--viz kit`` to enable the Kit viewer). The visualizer does not select the physics backend.
 - ``--video_length 200``: One episode per video (``episode_length_s / (sim.dt * decimation)`` ≈ 200 steps)
-- ``--video_interval 76800``: Records a video every 76,800 environment steps (~every 150 iterations with 512 steps/env)
+- ``--video_interval 76800``: Records a video every 76,800 policy steps per environment (600 task-space iterations
+  at 128 steps, or 150 joint-space iterations at 512 steps)
 - ``--distributed``: Required when launching under ``torch.distributed.run``
 
-Training uses a recurrent PPO agent (LSTM, 1500 max iterations, 512 steps per environment). Videos are saved under ``logs/``.
+Training uses a recurrent PPO agent (LSTM). Joint-space tasks default to 1,500
+iterations of 512 steps; PhysX and Newton task-space tasks default to 6,000 and
+4,000 iterations, respectively, of 128 steps. Videos are saved under ``logs/``.
 
 .. note::
 
@@ -1092,7 +1104,8 @@ Training uses a recurrent PPO agent (LSTM, 1500 max iterations, 512 steps per en
 
     uv run python -m tensorboard.main --logdir logs/rsl_rl/displayport_insertion_rizon4s
 
-Monitor ``Metrics/success_rate`` and reward curves to confirm learning. The curriculum anneals over the first 500 iterations — expect success rate to rise as the at-goal reset probability decreases.
+Monitor ``Metrics/success_rate`` and reward curves to confirm learning. The
+task-space curriculum anneals over the first 2,000 default iterations.
 
 **Policy learning progress (during training):** These TensorBoard curves show whether the policy is improving,
 whether terminal success follows the dense success metric, and whether the curriculum is still producing useful

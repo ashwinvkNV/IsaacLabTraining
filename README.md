@@ -102,7 +102,10 @@ the nominal robot with the existing PhysX task:
 uv run isaaclab train --rl_library rsl_rl \
   --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference \
   --num_envs 4096 --max_iterations 1500 --seed 42 \
-  --visualizer none
+  --visualizer none \
+  agent.save_interval=50 \
+  env.events.reset_plug_curriculum.params.anneal_end_iter=500 \
+  env.events.reset_plug_curriculum.params.num_steps_per_env=128
 ```
 
 To train for a calibrated physical arm, pass its validated USD as an absolute
@@ -113,6 +116,9 @@ uv run isaaclab train --rl_library rsl_rl \
   --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference \
   --num_envs 4096 --max_iterations 1500 --seed 42 \
   --visualizer none \
+  agent.save_interval=50 \
+  env.events.reset_plug_curriculum.params.anneal_end_iter=500 \
+  env.events.reset_plug_curriculum.params.num_steps_per_env=128 \
   env.scene.robot.spawn.usd_path=/absolute/path/to/calibrated_rizon4s.usd
 ```
 
@@ -156,8 +162,9 @@ ratio `1`, and translation scales `[0.025, 0.025, 0.010]`. The arm uses
 zero-gain IdealPD actuator groups with Newton-native effort saturation and
 configured solver velocity limits; OSC remains the joint-effort source. Socket-position noise
 is sampled from +/-10 mm once per episode, and the at-goal reset probability is
-annealed from `0.8` to `0` over the first 500 iterations. Use 256 environments
-per distributed rank; a four-rank job therefore trains 1,024 environments.
+annealed from `0.8` to `0` over 2,000 iterations of the 128-step rollout. Use
+256 environments per distributed rank; a four-rank job therefore trains 1,024
+environments and preserves the original curriculum sample budget.
 
 The nominal USD provides the portable training baseline. For policy training
 that should match a particular physical arm, provide that arm's validated

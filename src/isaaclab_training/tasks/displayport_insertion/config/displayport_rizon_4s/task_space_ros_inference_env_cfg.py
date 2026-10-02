@@ -98,8 +98,6 @@ class Rizon4sTaskSpaceDisplayportInsertionROSInferenceEnvCfg(Rizon4sTaskSpaceDis
             rot=_HUBBLE_PLUG_ROT,
         )
 
-        self.events.set_robot_to_grasp_pose.params["max_iterations"] = 150
-
         # Fixed asset parameters for ROS inference (geometry center, not USD root).
         self.fixed_asset_init_pos_center = list(_HUBBLE_GEOMETRY_POS)
 

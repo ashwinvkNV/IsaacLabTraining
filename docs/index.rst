@@ -97,6 +97,7 @@ formulations.
 
    setup_training
    repo_structure
+   displayport_optimization_validation
 
 .. toctree::
    :maxdepth: 2

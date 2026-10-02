@@ -20,6 +20,7 @@ training-tasks = "isaaclab_training.tasks"
 [project.scripts]
 isaaclab-training-play-policy-io = "isaaclab_training.cli.play_policy_io:main"
 isaaclab-training-export = "isaaclab_training.cli.export_policy:main"
+isaaclab-training-validate-displayport = "isaaclab_training.cli.displayport_training_validation:main"
 
 [dependency-groups]
 dev = ["codespell>=2.4", "pre-commit>=4.2", "pytest>=8.3", "ruff>=0.11"]

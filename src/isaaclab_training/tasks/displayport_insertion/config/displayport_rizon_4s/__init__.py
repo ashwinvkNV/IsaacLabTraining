@@ -13,6 +13,7 @@ from . import agents
 
 _INSERTION_ENV_ENTRY = "isaaclab_training.tasks.displayport_insertion.insertion_env:DisplayportInsertionEnv"
 _AGENT = f"{agents.__name__}.rsl_rl_ppo_cfg:Rizon4sGravDisplayportInsertionRNNPPORunnerCfg"
+_TASK_SPACE_AGENT = f"{agents.__name__}.rsl_rl_ppo_cfg:Rizon4sGravDisplayportInsertionTaskSpaceRNNPPORunnerCfg"
 _NEWTON_AGENT = f"{agents.__name__}.rsl_rl_ppo_cfg:Rizon4sGravDisplayportInsertionNewtonRNNPPORunnerCfg"
 
 
@@ -114,10 +115,10 @@ _NEWTON_ALIASES = {
 }
 
 for _task_id, _cfg in _TASKS.items():
-    _register(_task_id, _cfg)
+    _register(_task_id, _cfg, _TASK_SPACE_AGENT if "-TaskSpace" in _task_id else _AGENT)
 
 for _alias, _target in _ALIASES.items():
-    _register(_alias, _TASKS[_target])
+    _register(_alias, _TASKS[_target], _TASK_SPACE_AGENT if "-TaskSpace" in _target else _AGENT)
 
 for _task_id, _cfg in _NEWTON_TASKS.items():
     _register(_task_id, _cfg, _NEWTON_AGENT)

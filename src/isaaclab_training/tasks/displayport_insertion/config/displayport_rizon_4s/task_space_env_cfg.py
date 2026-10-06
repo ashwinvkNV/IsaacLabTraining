@@ -67,6 +67,13 @@ _ACTION_SCALE = 0.025
 # DisplayPort blade engagement along the insertion axis at the seated pose [m].
 _INSERTION_LENGTH = 0.011
 
+# Physical seat relative to the socket keypoint, expressed in the socket frame [m].
+# At-goal resets use this offset without changing the reward or observation keypoint.
+_AT_GOAL_SEAT_OFFSET = [0.00184, 0.0, -0.0006]
+
+# Keep the deepest valid at-goal spawn at 15 mm from the reward keypoint.
+_AT_GOAL_MAX_ABSOLUTE_DEPTH = 0.015
+
 # Gripper tool-center-point (TCP) offset from the flange body, in the flange's local
 # frame [m]. The policy observes the TCP pose (where the plug is held), not the raw
 # flange; the TCP shares the flange orientation, so only the position is offset.
@@ -221,7 +228,8 @@ class TaskSpaceEventCfg:
             "num_steps_per_env": 512,
             "insertion_axis": [1.0, 0.0, 0.0],
             "insertion_length": _INSERTION_LENGTH,
-            "at_goal_depth_range": [0.0, 0.015],
+            "at_goal_depth_range": [0.0, _AT_GOAL_MAX_ABSOLUTE_DEPTH - _AT_GOAL_SEAT_OFFSET[0]],
+            "at_goal_seat_offset": _AT_GOAL_SEAT_OFFSET,
             "approach_depth_range": [0.02, 0.06],
             "socket_insertion_offset": SOCKET_INSERTION_OFFSET,
             "plug_insertion_offset": PLUG_INSERTION_OFFSET,

@@ -32,6 +32,7 @@ from isaaclab_training.mdp import events as deploy_events
 from isaaclab_training.mdp.actions import _pose_rel_action_extra
 from isaaclab_training.mdp.events import (
     _body_link_jacobian_for_ik,
+    _curriculum_goal_keypoint_positions,
     reset_plug_at_goal_curriculum,
     set_robot_to_object_grasp_pose,
 )
@@ -85,6 +86,57 @@ _AGENT_MODULE = f"{_CFG_PACKAGE}.agents.rsl_rl_ppo_cfg"
 def _observation_term_names(group: object) -> list[str]:
     """Return observation terms in their concatenation order."""
     return [field.name for field in fields(group) if isinstance(getattr(group, field.name), ObservationTermCfg)]
+
+
+def test_displayport_curriculum_composes_physical_seat_in_socket_frame() -> None:
+    """Only at-goal rows receive the socket-local physical-seat offset."""
+    keypoint_origin = torch.tensor(
+        [
+            [1.0, 2.0, 3.0],
+            [4.0, 5.0, 6.0],
+            [7.0, 8.0, 9.0],
+        ]
+    )
+    socket_quat = torch.tensor(
+        [
+            [0.0, 0.0, 0.0, 1.0],
+            [0.0, 0.0, math.sqrt(0.5), math.sqrt(0.5)],
+            [0.0, 0.0, math.sqrt(0.5), math.sqrt(0.5)],
+        ]
+    )
+    insertion_axis = torch.tensor([1.0, 0.0, 0.0])
+    depth = torch.tensor([0.0, 0.02, 0.02])
+    at_goal_mask = torch.tensor([True, True, False])
+    seat_offset = torch.tensor([0.00184, 0.0, -0.0006])
+
+    result = _curriculum_goal_keypoint_positions(
+        keypoint_origin,
+        socket_quat,
+        insertion_axis,
+        depth,
+        at_goal_mask,
+        seat_offset,
+    )
+
+    torch.testing.assert_close(result[0], torch.tensor([1.00184, 2.0, 2.9994]), atol=1.0e-7, rtol=0.0)
+    torch.testing.assert_close(result[1], torch.tensor([4.0, 5.02184, 5.9994]), atol=1.0e-7, rtol=0.0)
+    torch.testing.assert_close(result[2], torch.tensor([7.0, 8.02, 9.0]), atol=1.0e-7, rtol=0.0)
+
+
+@pytest.mark.parametrize(
+    "cfg_cls",
+    [
+        Rizon4sTaskSpaceDisplayportInsertionEnvCfg,
+        Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg,
+    ],
+)
+def test_displayport_effective_reset_curricula_keep_physical_seat_bounds(cfg_cls: type) -> None:
+    """Static regression for the reset curriculum geometry contract."""
+    cfg = cfg_cls()
+    curriculum = cfg.events.reset_plug_curriculum.params
+
+    assert curriculum["at_goal_depth_range"] == pytest.approx([0.0, 0.01316])
+    assert curriculum["at_goal_seat_offset"] == pytest.approx([0.00184, 0.0, -0.0006])
 
 
 @pytest.mark.parametrize(
@@ -791,7 +843,9 @@ def test_displayport_newton_domain_randomization_curriculum_and_rewards():
     assert curriculum["num_steps_per_env"] == 512
     assert curriculum["insertion_axis"] == pytest.approx([1.0, 0.0, 0.0])
     assert curriculum["insertion_length"] == pytest.approx(0.011)
-    assert curriculum["at_goal_depth_range"] == pytest.approx([0.0, 0.015])
+    assert curriculum["at_goal_depth_range"] == pytest.approx([0.0, 0.01316])
+    assert curriculum["at_goal_seat_offset"] == pytest.approx([0.00184, 0.0, -0.0006])
+    assert curriculum["at_goal_depth_range"][1] + curriculum["at_goal_seat_offset"][0] == pytest.approx(0.015)
     assert curriculum["approach_depth_range"] == pytest.approx([0.02, 0.06])
     assert curriculum["socket_insertion_offset"] == pytest.approx(SOCKET_INSERTION_OFFSET)
     assert curriculum["plug_insertion_offset"] == pytest.approx(PLUG_INSERTION_OFFSET)

@@ -525,7 +525,8 @@ Domain Randomization Strategy
             "anneal_end_iter": 500.0,
             "num_steps_per_env": 512,
             "insertion_axis": [1.0, 0.0, 0.0],
-            "at_goal_depth_range": [0.0, 0.015],      # 0–15 mm engaged
+            "at_goal_depth_range": [0.0, 0.01316],    # seat to 15 mm from goal keypoint
+            "at_goal_seat_offset": [0.00184, 0.0, -0.0006],
             "approach_depth_range": [0.02, 0.06],     # 20–60 mm approach
             "normal_pose_range": {
                 "x": [-0.02, 0.02],
@@ -535,7 +536,10 @@ Domain Randomization Strategy
         },
     )
 
-At the start of training, 80% of resets place the plug near the inserted pose; this probability linearly anneals to 0% over 500 training iterations, forcing the policy to learn full approach and insertion.
+At the start of training, 80% of resets place the plug between the physical seat and the partially inserted pose. The
+socket-frame seat offset prevents those resets from starting inside the collision geometry while leaving the reward
+and observation keypoint unchanged. This probability linearly anneals to 0% over 500 training iterations, forcing the
+policy to learn full approach and insertion.
 
 .. figure:: ../_static/images/displayport/dp_curriculum.png
    :align: center
@@ -654,10 +658,10 @@ If the policy approaches but does not fully seat the plug, try increasing the ex
 
    Reward terms over training for the DisplayPort policy.
 
-Reset Curriculum
-~~~~~~~~~~~~~~~~
+Task-Space Reset Curriculum
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Defined in ``config/displayport_rizon_4s/joint_pos_env_cfg.py`` → ``reset_plug_curriculum``.
+Defined in ``config/displayport_rizon_4s/task_space_env_cfg.py`` → ``reset_plug_curriculum``.
 
 .. list-table:: Curriculum hyperparameters
    :widths: 35 20 45
@@ -673,8 +677,11 @@ Defined in ``config/displayport_rizon_4s/joint_pos_env_cfg.py`` → ``reset_plug
      - ``500``
      - Training iterations over which at-goal probability anneals. Extend (e.g. 800–1000) if success rate drops when curriculum gets harder; shorten if training is too slow to reach approach poses.
    * - ``at_goal_depth_range``
-     - ``[0.0, 0.015]`` m
-     - How deep the plug starts when sampled "at goal" (0–15 mm engaged). Narrow for fine final-insertion practice; widen slightly if the policy never sees near-mated contacts.
+     - ``[0.0, 0.01316]`` m from the physical seat
+     - How far the plug starts from the seat along the insertion axis. Together with the seat offset, this covers 1.84–15 mm from the reward keypoint without spawning below the physical seat.
+   * - ``at_goal_seat_offset``
+     - ``[0.00184, 0.0, -0.0006]`` m
+     - Socket-frame displacement from the reward keypoint to the measured physical seat. Revalidate this value if the plug or socket geometry changes.
    * - ``approach_depth_range``
      - ``[0.02, 0.06]`` m
      - Standoff distance when not at goal (20–60 mm). Increase upper bound for harder long-range approach; decrease if the policy struggles to reach the socket mouth.
@@ -872,7 +879,7 @@ recommended fixed profile uses the stable Newton 1.6 release with:
    * - Socket observation noise
      - Uniform ±10 mm position error, sampled once and held for the episode
    * - Reset curriculum
-     - At-goal probability annealed from ``0.8`` to ``0`` over iterations 0–500
+     - Physical-seat at-goal resets with probability annealed from ``0.8`` to ``0`` over iterations 0–500
 
 Both the PhysX and Newton configurations inherit Isaac Lab's stock nominal Rizon 4s with Grav USD. The stock
 flange is a mass-only marker with zero authored inertia. Before Newton imports the scene, the task authors the same

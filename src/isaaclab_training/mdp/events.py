@@ -7,7 +7,10 @@
 
 from __future__ import annotations
 
+import inspect
 import random
+import warnings
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import torch
@@ -21,6 +24,52 @@ from isaaclab_tasks.contrib.automate import factory_control as fc
 if TYPE_CHECKING:
     from isaaclab.assets import Articulation, RigidObject
     from isaaclab.envs import ManagerBasedEnv
+
+
+def _body_link_jacobian_for_ik(asset: Articulation, env_ids: torch.Tensor, body_idx: int) -> torch.Tensor:
+    """Select an end-effector Jacobian with only actuated-joint columns."""
+    jacobian_body_idx = body_idx - 1 if asset.is_fixed_base else body_idx
+    return asset.data.body_link_jacobian_w.torch[
+        env_ids,
+        jacobian_body_idx,
+        :,
+        asset.num_base_dofs :,
+    ]
+
+
+def _gripper_joint_setter_call_mode(callback: Callable[..., None]) -> str:
+    """Return how a gripper callback accepts the optional joint-name mapping."""
+    try:
+        callback_signature = inspect.signature(callback)
+    except (TypeError, ValueError):
+        # Some extension callables do not expose a Python signature. Preserve the
+        # historical four-argument contract for those callbacks.
+        return "legacy"
+
+    legacy_args = (None, None, None, None)
+    try:
+        callback_signature.bind(*legacy_args, joint_name_to_idx=None)
+    except TypeError:
+        pass
+    else:
+        return "keyword"
+
+    try:
+        callback_signature.bind(*legacy_args, None)
+    except TypeError:
+        pass
+    else:
+        return "positional"
+
+    try:
+        callback_signature.bind(*legacy_args)
+    except TypeError as exc:
+        raise TypeError(
+            "gripper_joint_setter_func must accept four legacy arguments "
+            "(joint_pos, reset_indices, finger_joints, finger_joint_position) and may accept "
+            "joint_name_to_idx as a fifth positional or keyword argument."
+        ) from exc
+    return "legacy"
 
 
 class randomize_gear_type(ManagerTermBase):
@@ -201,9 +250,6 @@ class set_robot_to_grasp_pose(ManagerTermBase):
             raise ValueError(f"End effector body '{self.end_effector_body_name}' not found in robot")
         self.eef_idx = eef_indices[0]
 
-        # Find jacobian body index (for fixed-base robots, subtract 1)
-        self.jacobi_body_idx = self.eef_idx - 1
-
         # Find all joints once
         all_joints, all_joints_names = self.robot_asset.find_joints([".*"])
         self.all_joints = all_joints
@@ -327,11 +373,7 @@ class set_robot_to_grasp_pose(ManagerTermBase):
             if torch.all(pos_error_norm < pos_threshold) and torch.all(rot_error_norm < rot_threshold):
                 break
 
-            # Solve IK using jacobian. ``body_link_jacobian_w`` prepends ``num_base_dofs``
-            # floating-base columns on the DoF axis (0 for fixed-base, 6 for floating-base);
-            # slice past them so the column axis aligns with the actuated-joint state.
-            jacobians = self.robot_asset.data.body_link_jacobian_w.torch.clone()
-            jacobian = jacobians[env_ids, self.jacobi_body_idx, :, self.robot_asset.num_base_dofs :]
+            jacobian = _body_link_jacobian_for_ik(self.robot_asset, env_ids, self.eef_idx)
 
             delta_dof_pos = fc._get_delta_dof_pos(
                 delta_pose=delta_hand_pose,
@@ -554,6 +596,8 @@ class set_robot_to_object_grasp_pose(ManagerTermBase):
         self.end_effector_body_name: str = cfg.params["end_effector_body_name"]
         self.num_arm_joints: int = cfg.params["num_arm_joints"]
         self.gripper_joint_setter_func = cfg.params["gripper_joint_setter_func"]
+        self._gripper_joint_setter_mode: str | None = None
+        self._resolve_gripper_joint_setter_call_mode()
         self.target_object_name: str = cfg.params["target_object_name"]
 
         grasp_offset = cfg.params.get("grasp_offset", [0.0, 0.0, 0.0])
@@ -577,11 +621,45 @@ class set_robot_to_object_grasp_pose(ManagerTermBase):
         if len(eef_indices) == 0:
             raise ValueError(f"End effector body '{self.end_effector_body_name}' not found in robot")
         self.eef_idx = eef_indices[0]
-        self.jacobi_body_idx = self.eef_idx - 1
 
-        all_joints, _ = self.robot_asset.find_joints([".*"])
+        all_joints, all_joint_names = self.robot_asset.find_joints([".*"])
         self.all_joints = all_joints
         self.finger_joints = all_joints[self.num_arm_joints :]
+        self.joint_name_to_idx = dict(zip(all_joint_names, all_joints, strict=True))
+
+    def _resolve_gripper_joint_setter_call_mode(self) -> str:
+        """Resolve and cache the callback signature used by this reset term."""
+        mode = getattr(self, "_gripper_joint_setter_mode", None)
+        if mode is not None:
+            return mode
+
+        mode = _gripper_joint_setter_call_mode(self.gripper_joint_setter_func)
+        self._gripper_joint_setter_mode = mode
+        if mode == "legacy":
+            warnings.warn(
+                "Four-argument gripper_joint_setter_func callbacks are deprecated; accept "
+                "joint_name_to_idx as a fifth positional or keyword argument.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+        return mode
+
+    def _set_gripper_joint_position(
+        self,
+        joint_pos: torch.Tensor,
+        reset_indices: list[int],
+        finger_joints: list[int],
+        finger_joint_position: float,
+    ) -> None:
+        """Invoke a new or legacy gripper callback without masking callback errors."""
+        mode = self._resolve_gripper_joint_setter_call_mode()
+        args = (joint_pos, reset_indices, finger_joints, finger_joint_position)
+        if mode == "keyword":
+            self.gripper_joint_setter_func(*args, joint_name_to_idx=self.joint_name_to_idx)
+        elif mode == "positional":
+            self.gripper_joint_setter_func(*args, self.joint_name_to_idx)
+        else:
+            self.gripper_joint_setter_func(*args)
 
     def __call__(
         self,
@@ -597,69 +675,37 @@ class set_robot_to_object_grasp_pose(ManagerTermBase):
         end_effector_body_name: str | None = None,
         num_arm_joints: int | None = None,
         grasp_rot_offset: list | None = None,
-        gripper_joint_setter_func: callable | None = None,
+        gripper_joint_setter_func: Callable[..., None] | None = None,
     ):
         num_reset_envs = len(env_ids)
         grasp_offsets = self.grasp_offsets_buffer[:num_reset_envs]
         grasp_rot_offset_tensor = self.grasp_rot_offset_tensor[env_ids]
 
-        # One-shot debug log to confirm the event fires and report IK convergence.
-        # Remove or guard once the grasp wiring is verified.
-        debug_first_call = not getattr(self, "_debug_printed", False)
-        if debug_first_call:
-            self._debug_printed = True
-            target_object_dbg: RigidObject = env.scene[self.target_object_name]
-            init_obj_pos = wp.to_torch(target_object_dbg.data.root_link_pos_w)[env_ids][0].tolist()
-            init_obj_quat = wp.to_torch(target_object_dbg.data.root_link_quat_w)[env_ids][0].tolist()
-            init_eef_pos = wp.to_torch(self.robot_asset.data.body_pos_w)[env_ids, self.eef_idx][0].tolist()
-            init_eef_quat = wp.to_torch(self.robot_asset.data.body_quat_w)[env_ids, self.eef_idx][0].tolist()
-            print(
-                f"[GRASP-DBG] set_robot_to_object_grasp_pose fired:"
-                f" target={self.target_object_name!r} num_reset_envs={num_reset_envs}"
-                f" eef_idx={self.eef_idx} num_arm_joints={self.num_arm_joints}\n"
-                f"           grasp_offset={self.grasp_offset_tensor.tolist()}"
-                f" grasp_rot_offset(xyzw)={self.grasp_rot_offset_tensor[0].tolist()}"
-                f" hand_close_width={self.hand_close_width}\n"
-                f"           init_obj_pos_w={init_obj_pos}"
-                f" init_obj_quat(xyzw)={init_obj_quat}\n"
-                f"           init_eef_pos_w={init_eef_pos}"
-                f" init_eef_quat(xyzw)={init_eef_quat}"
+        # Sample one grasp target per environment and keep it fixed throughout
+        # the iterative IK solve instead of moving the target while it converges.
+        grasp_offsets[:] = self.grasp_offset_tensor
+        if pos_randomization_range is not None:
+            range_list_pos = [pos_randomization_range.get(key, (0.0, 0.0)) for key in ("x", "y", "z")]
+            ranges_pos = self.grasp_offset_tensor.new_tensor(range_list_pos)
+            grasp_offsets.add_(
+                math_utils.sample_uniform(ranges_pos[:, 0], ranges_pos[:, 1], (num_reset_envs, 3), device=env.device)
             )
 
-        last_pos_err = None
-        last_rot_err = None
-        converged_at = -1
-        last_target_pos = None
-        last_target_quat = None
+        target_object: RigidObject = env.scene[self.target_object_name]
 
-        for _iter in range(max_iterations):
+        for _ in range(max_iterations):
             joint_pos = wp.to_torch(self.robot_asset.data.joint_pos)[env_ids].clone()
             joint_vel = wp.to_torch(self.robot_asset.data.joint_vel)[env_ids].clone()
 
-            target_object: RigidObject = env.scene[self.target_object_name]
             grasp_object_pos_world = wp.to_torch(target_object.data.root_link_pos_w)[env_ids]
             grasp_object_quat = wp.to_torch(target_object.data.root_link_quat_w)[env_ids]
 
             grasp_object_quat = math_utils.quat_mul(grasp_object_quat, grasp_rot_offset_tensor)
 
-            grasp_offsets[:] = self.grasp_offset_tensor
-
-            if pos_randomization_range is not None:
-                pos_keys = ["x", "y", "z"]
-                range_list_pos = [pos_randomization_range.get(key, (0.0, 0.0)) for key in pos_keys]
-                ranges_pos = torch.tensor(range_list_pos, device=env.device)
-                rand_pos_offsets = math_utils.sample_uniform(
-                    ranges_pos[:, 0], ranges_pos[:, 1], (len(env_ids), 3), device=env.device
-                )
-                grasp_offsets = grasp_offsets + rand_pos_offsets
-
             grasp_object_pos_world = grasp_object_pos_world + math_utils.quat_apply(grasp_object_quat, grasp_offsets)
 
             eef_pos = wp.to_torch(self.robot_asset.data.body_pos_w)[env_ids, self.eef_idx]
             eef_quat = wp.to_torch(self.robot_asset.data.body_quat_w)[env_ids, self.eef_idx]
-
-            last_target_pos = grasp_object_pos_world.clone()
-            last_target_quat = grasp_object_quat.clone()
 
             pos_error, axis_angle_error = fc.get_pose_error(
                 fingertip_midpoint_pos=eef_pos,
@@ -673,15 +719,10 @@ class set_robot_to_object_grasp_pose(ManagerTermBase):
 
             pos_error_norm = torch.linalg.norm(pos_error, dim=-1)
             rot_error_norm = torch.linalg.norm(axis_angle_error, dim=-1)
-            last_pos_err = pos_error_norm
-            last_rot_err = rot_error_norm
-
             if torch.all(pos_error_norm < pos_threshold) and torch.all(rot_error_norm < rot_threshold):
-                converged_at = _iter
                 break
 
-            jacobians = wp.to_torch(self.robot_asset.root_view.get_jacobians()).clone()
-            jacobian = jacobians[env_ids, self.jacobi_body_idx, :, :]
+            jacobian = _body_link_jacobian_for_ik(self.robot_asset, env_ids, self.eef_idx)
 
             delta_dof_pos = fc._get_delta_dof_pos(
                 delta_pose=delta_hand_pose,
@@ -712,11 +753,7 @@ class set_robot_to_object_grasp_pose(ManagerTermBase):
             self.robot_asset.write_joint_position_to_sim_index(position=joint_pos, env_ids=env_ids)
             self.robot_asset.write_joint_velocity_to_sim_index(velocity=joint_vel, env_ids=env_ids)
 
-        # Snap the held object to the achieved gripper pose so the gripper actually
-        # holds it after closing. Without this, any IK residual error or USD
-        # geometry offset leaves the object outside the finger gap and gravity drops
-        # Snap the held object to the achieved gripper pose so the gripper
-        # actually holds it after closing.
+        # Snap the held object to the achieved gripper pose before closing the gripper.
         held_object = env.scene[self.target_object_name]
         achieved_hand_pos = wp.to_torch(self.robot_asset.data.body_pos_w)[env_ids, self.eef_idx].clone()
         achieved_hand_quat = wp.to_torch(self.robot_asset.data.body_quat_w)[env_ids, self.eef_idx].clone()
@@ -738,38 +775,26 @@ class set_robot_to_object_grasp_pose(ManagerTermBase):
         held_object.write_root_pose_to_sim(new_root_pose, env_ids=env_ids)
         held_object.write_root_velocity_to_sim(zero_velocity, env_ids=env_ids)
 
-        if debug_first_call:
-            pos_err_max = float(last_pos_err.max().item()) if last_pos_err is not None else float("nan")
-            rot_err_max = float(last_rot_err.max().item()) if last_rot_err is not None else float("nan")
-            tgt_pos0 = target_obj_pos[0].tolist()
-            tgt_quat0 = target_obj_quat[0].tolist()
-            eef_pos0 = achieved_hand_pos[0].tolist()
-            eef_quat0 = achieved_hand_quat[0].tolist()
-            ik_target_pos0 = last_target_pos[0].tolist() if last_target_pos is not None else None
-            ik_target_quat0 = last_target_quat[0].tolist() if last_target_quat is not None else None
-            print(
-                f"[GRASP-DBG] IK done: converged_at_iter={converged_at}\n"
-                f"           max_pos_err={pos_err_max:.6f} m, max_rot_err={rot_err_max:.6f} rad\n"
-                f"           IK_target_pos_w[0]={ik_target_pos0}\n"
-                f"           IK_target_quat(xyzw)[0]={ik_target_quat0}\n"
-                f"           achieved_eef_pos_w[0]={eef_pos0}\n"
-                f"           achieved_eef_quat(xyzw)[0]={eef_quat0}\n"
-                f"           snapped_obj_pos_w[0]={tgt_pos0}\n"
-                f"           snapped_obj_quat(xyzw)[0]={tgt_quat0}"
-            )
-
         joint_vel = torch.zeros_like(wp.to_torch(self.robot_asset.data.joint_vel)[env_ids])
         joint_pos = wp.to_torch(self.robot_asset.data.joint_pos)[env_ids].clone()
 
         # Write gripper STATE at ``hand_hold_width`` (fingers just touching the
         # plug, no mesh overlap) and set the TARGET to ``hand_close_width``
         # (fully closed) so the actuator drive squeezes around the plug.
-        self.gripper_joint_setter_func(joint_pos, list(range(num_reset_envs)), self.finger_joints, self.hand_hold_width)
+        self._set_gripper_joint_position(
+            joint_pos,
+            list(range(num_reset_envs)),
+            self.finger_joints,
+            self.hand_hold_width,
+        )
         self.robot_asset.write_joint_position_to_sim_index(position=joint_pos, env_ids=env_ids)
         self.robot_asset.write_joint_velocity_to_sim_index(velocity=joint_vel, env_ids=env_ids)
 
-        self.gripper_joint_setter_func(
-            joint_pos, list(range(num_reset_envs)), self.finger_joints, self.hand_close_width
+        self._set_gripper_joint_position(
+            joint_pos,
+            list(range(num_reset_envs)),
+            self.finger_joints,
+            self.hand_close_width,
         )
         self.robot_asset.set_joint_position_target_index(target=joint_pos, joint_ids=self.all_joints, env_ids=env_ids)
 
@@ -778,9 +803,10 @@ class reset_plug_at_goal_curriculum(ManagerTermBase):
     """Reset a fraction of plugs at the goal position (at-goal curriculum).
 
     For each reset batch, a fraction ``at_goal_prob`` of environments have the
-    plug placed along the insertion axis at a random depth (from socket opening
-    to full insertion) with goal orientation. The remaining environments get
-    normal pose randomization.
+    plug placed along the insertion axis at a random depth relative to the
+    configured at-goal reference: the reward keypoint by default, or the
+    physical seat when ``at_goal_seat_offset`` is provided. The remaining
+    environments get normal pose randomization.
 
     This replaces the simple ``reset_root_state_uniform`` for the plug when
     curriculum-based training is desired.
@@ -812,7 +838,13 @@ class reset_plug_at_goal_curriculum(ManagerTermBase):
 
         self.insertion_length: float = cfg.params.get("insertion_length", 0.02)
 
-        # Optional depth ranges along the insertion axis, measured from the socket keypoint origin.
+        # Socket-frame offset [m] from the reward keypoint to the physical
+        # seated pose. It is applied only to at-goal curriculum placements.
+        at_goal_seat_offset = cfg.params.get("at_goal_seat_offset", [0.0, 0.0, 0.0])
+        self.at_goal_seat_offset = torch.tensor(at_goal_seat_offset, device=env.device, dtype=torch.float32)
+
+        # Optional depth ranges along the insertion axis. At-goal depth is physical-seat-relative
+        # when a nonzero offset is configured; approach depth remains socket-keypoint-relative.
         self.at_goal_depth_range = cfg.params.get("at_goal_depth_range", None)
         self.approach_depth_range = cfg.params.get("approach_depth_range", None)
 
@@ -864,6 +896,7 @@ class reset_plug_at_goal_curriculum(ManagerTermBase):
         num_steps_per_env: int | None = None,
         at_goal_depth_range: list | None = None,
         approach_depth_range: list | None = None,
+        at_goal_seat_offset: list | None = None,
     ):
         num_envs = len(env_ids)
 
@@ -879,9 +912,6 @@ class reset_plug_at_goal_curriculum(ManagerTermBase):
             socket_offset_batch,
             id_quat_batch,
         )
-
-        # Insertion axis in world frame (rotated by socket orientation)
-        insertion_axis_w = math_utils.quat_apply(socket_quat, self.insertion_axis.unsqueeze(0).expand(num_envs, -1))
 
         # Goal plug orientation in world frame
         goal_quat_w = math_utils.quat_mul(socket_quat, self.goal_rot.unsqueeze(0).expand(num_envs, -1))
@@ -914,10 +944,14 @@ class reset_plug_at_goal_curriculum(ManagerTermBase):
                 at_goal_local = at_goal_mask.nonzero(as_tuple=False).squeeze(-1)
                 num_at_goal = int(at_goal_local.numel())
                 if num_at_goal > 0:
-                    depth_rand = torch.rand(num_at_goal, 1, device=env.device)
-                    goal_kp_pos = (
-                        kp_origin_w[at_goal_local]
-                        + depth_rand * insertion_axis_w[at_goal_local] * self.insertion_length
+                    depth = torch.rand(num_at_goal, device=env.device) * self.insertion_length
+                    goal_kp_pos = _curriculum_goal_keypoint_positions(
+                        kp_origin_w[at_goal_local],
+                        socket_quat[at_goal_local],
+                        self.insertion_axis,
+                        depth,
+                        torch.ones(num_at_goal, device=env.device, dtype=torch.bool),
+                        self.at_goal_seat_offset,
                     )
 
                     plug_pos[at_goal_local] = goal_kp_pos - plug_kp_in_world[at_goal_local]
@@ -943,7 +977,14 @@ class reset_plug_at_goal_curriculum(ManagerTermBase):
                 rand_pos[:, i] = torch.empty(num_envs, device=env.device).uniform_(rng[0], rng[1])
             rand_pos[at_goal_mask] = 0.0
 
-            goal_kp_pos = kp_origin_w + depth.unsqueeze(-1) * insertion_axis_w
+            goal_kp_pos = _curriculum_goal_keypoint_positions(
+                kp_origin_w,
+                socket_quat,
+                self.insertion_axis,
+                depth,
+                at_goal_mask,
+                self.at_goal_seat_offset,
+            )
             plug_pos = goal_kp_pos - plug_kp_in_world + rand_pos
             plug_quat = goal_quat_w.clone()
 
@@ -951,3 +992,31 @@ class reset_plug_at_goal_curriculum(ManagerTermBase):
         zero_vel = torch.zeros(num_envs, 6, device=env.device, dtype=torch.float32)
         self.plug.write_root_pose_to_sim(new_root_pose, env_ids=env_ids)
         self.plug.write_root_velocity_to_sim(zero_vel, env_ids=env_ids)
+
+
+def _curriculum_goal_keypoint_positions(
+    keypoint_origin_w: torch.Tensor,
+    socket_quat_w: torch.Tensor,
+    insertion_axis: torch.Tensor,
+    depth: torch.Tensor,
+    at_goal_mask: torch.Tensor,
+    at_goal_seat_offset: torch.Tensor,
+) -> torch.Tensor:
+    """Compose curriculum keypoint positions while preserving approach poses.
+
+    ``insertion_axis`` and ``at_goal_seat_offset`` are expressed in the socket frame.
+    The physical-seat offset applies only to at-goal rows; approach rows remain
+    keypoint-relative.
+    """
+    num_envs = depth.shape[0]
+    insertion_axis_w = math_utils.quat_apply(socket_quat_w, insertion_axis.unsqueeze(0).expand(num_envs, -1))
+    seat_offset_w = math_utils.quat_apply(
+        socket_quat_w,
+        at_goal_seat_offset.unsqueeze(0).expand(num_envs, -1),
+    )
+    selected_seat_offset_w = torch.where(
+        at_goal_mask.unsqueeze(-1),
+        seat_offset_w,
+        torch.zeros_like(seat_offset_w),
+    )
+    return keypoint_origin_w + selected_seat_offset_w + depth.unsqueeze(-1) * insertion_axis_w

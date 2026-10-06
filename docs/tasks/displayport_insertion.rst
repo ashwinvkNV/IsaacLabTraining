@@ -52,11 +52,11 @@ The task is packaged under the standalone ``isaaclab_training`` namespace:
 - ``src/isaaclab_training/tasks/displayport_insertion/config/displayport_rizon_4s/`` — Flexiv Rizon 4s + Grav robot-specific overrides and gym registrations
 - ``src/isaaclab_training/tasks/displayport_insertion/config/displayport_rizon_4s/joint_pos_env_cfg.py`` — joint-space (relative joint position) environment
 - ``src/isaaclab_training/tasks/displayport_insertion/config/displayport_rizon_4s/task_space_env_cfg.py`` — task-space (operational space control) environment
-- ``src/isaaclab_training/mdp/`` — reusable observation, action, reward, event, noise, and termination helpers
-- ``uv run isaaclab train --rl_library rsl_rl`` — Isaac Lab's packaged unified trainer
-- ``src/isaaclab_training/cli/play_policy_io.py`` / ``uv run isaaclab-training-play-policy-io`` — DisplayPort-specific inference, LEAPP validation, and CSV logging
-- ``src/isaaclab_training/cli/export_policy.py`` / ``uv run --extra leapp isaaclab-training-export`` — packaged LEAPP exporter
-- ``src/isaaclab_training/export/contracts.py`` — task-specific LEAPP I/O contracts such as ``displayport_task_space``
+- ``src/isaaclab_training/tasks/displayport_insertion/config/displayport_rizon_4s/task_space_newton_env_cfg.py`` — Newton point-SDF task-space environment
+- ``src/isaaclab_training/tasks/displayport_insertion/config/displayport_rizon_4s/task_space_newton_ros_inference_env_cfg.py`` — matching Newton ROS / LEAPP deployment contract
+- ``src/isaaclab_training/mdp/`` — reusable deploy-oriented MDP helpers shared by downstream tasks
+- ``src/isaaclab_training/cli/play_policy_io.py`` — inference / LEAPP validation / CSV logging command
+- ``src/isaaclab_training/cli/export_policy.py`` — generic LEAPP exporter with named task-specific I/O contracts
 
 Overview
 --------
@@ -195,11 +195,11 @@ the joint-space environments, and the flange / end-effector pose for the task-sp
            - Dim
            - Real-World Source
            - Noise
-         * - ``eef_pos`` (TCP position)
+         * - ``eef_pos`` (end-effector position)
            - 3
            - Robot controller
            - None
-         * - ``eef_rot_6d`` (TCP orientation)
+         * - ``eef_rot_6d`` (end-effector orientation)
            - 6
            - Robot controller
            - None
@@ -219,9 +219,10 @@ the joint-space environments, and the flange / end-effector pose for the task-sp
       quaternion. This is continuous over SO(3), which avoids the sign-flip discontinuity a quaternion introduces
       and is easier for the network to regress against.
 
-      The end-effector position is reported at the **tool center point (TCP)**, i.e. the ``flange`` body offset
-      along its local +Z by ``_TCP_OFFSET`` in ``task_space_env_cfg.py``. Note that the observation is taken at the
-      TCP while the action is applied at the flange; see :ref:`taskspace-action-space`.
+      The PhysX task reports the **tool center point (TCP)**, i.e. the ``flange`` body offset along its local +Z by
+      ``_TCP_OFFSET`` in ``task_space_env_cfg.py``. The Newton task preserves the validated checkpoint ABI and reports
+      the raw ``flange`` pose. Both exports expose the same canonical port names, but their flat checkpoint vectors
+      are not interchangeable; see :ref:`newton-task-space-profile`.
 
 **Implementation (base class):**
 
@@ -297,9 +298,10 @@ positions and velocities plus the plug keypoint frame (task space) or the plug p
 As with the gear assembly task, policies trained without noise on proprioceptive observations transfer well to the Flexiv Rizon 4s. The controller provides sufficiently accurate joint state feedback that modeling sensor noise on joint states does not improve sim-to-real transfer for this task. The same reasoning carries over to the task-space variants: the end-effector pose is derived from those same joint encoders through forward kinematics, so it inherits their accuracy and is likewise left noise-free.
 
 The socket pose, by contrast, comes from perception and *is* the observation worth corrupting. The joint-space
-environments apply ±10 mm of reset-sampled uniform noise to ``socket_pos`` by default. The task-space environments
-ship with observation noise disabled so the contract matches the deployed perception stack exactly; add it through
-the observation term's ``noise`` field if your perception pipeline is less accurate.
+environments apply ±10 mm of reset-sampled uniform noise to ``socket_pos`` by default. The PhysX task-space profile
+leaves socket observation noise disabled. The recommended Newton task-space profile applies ±10 mm of uniform
+position noise, sampled once at reset and held for the episode, while its play variant disables corruption. Match this
+setting to the error characteristics of your deployed perception pipeline.
 
 
 Part 2: System Response Consistency
@@ -375,11 +377,17 @@ Low plug/socket friction reduces sticking during blade engagement. Gripper finge
 Actuator Modeling
 ~~~~~~~~~~~~~~~~~
 
-The Rizon 4s uses ``ImplicitActuatorCfg`` with per-joint-group arm tuning from ``FLEXIV_RIZON4S_GRAV_GRIPPER_CFG``, plus dedicated Grav gripper actuators:
+The PhysX and joint-space profiles inherit ``ImplicitActuatorCfg`` arm groups from
+``FLEXIV_RIZON4S_GRAV_GRIPPER_CFG``. The Newton OSC profile replaces only the seven arm joints with zero-gain
+``IdealPDActuatorCfg`` groups. Newton-native execution enforces the actuator effort limit, while
+``joint_velocity_limit`` requests the backend solver limit; ``actuator_velocity_limit`` remains available as
+actuator metadata. OSC remains the torque source, and the IdealPD wrapper adds no joint-position stiffness.
+
+The PhysX profiles use these implicit Grav gripper actuators:
 
 .. code-block:: python
 
-    # Grav gripper actuator configuration
+    # PhysX Grav gripper actuator configuration
     self.scene.robot.actuators["gripper_drive"] = ImplicitActuatorCfg(
         joint_names_expr=["finger_joint"],
         effort_limit_sim=2.0,
@@ -395,9 +403,15 @@ The Rizon 4s uses ``ImplicitActuatorCfg`` with per-joint-group arm tuning from `
         damping=0.0,
     )
 
+The Newton profile also uses implicit gripper actuators, but configures the drive/passive effort limits to
+``200/20 N*m``, velocity limits to ``2/1 rad/s``, stiffness to ``2000``, and damping to ``10``. Its passive group
+covers both knuckle and outer-finger joints.
+
 .. note::
 
-   **Flexiv Rizon 4s**: Domain randomization for actuator gains and joint friction is not included in the Rizon 4s ``EventCfg``. The real-world Flexiv controller is stable and precise enough that the simulation policy transfers without these additional randomizations, consistent with the gear assembly Flexiv setup.
+   **Flexiv Rizon 4s**: Arm PD-gain randomization is disabled for torque-level OSC. The recommended Newton
+   profile retains additive arm-joint friction randomization from ``0`` to ``0.15``; remove that event only for a
+   controlled parity ablation.
 
 .. _taskspace-action-space:
 
@@ -457,21 +471,22 @@ target. What differs is the space that delta lives in.
 
       Two details matter for deployment:
 
-      * The arm's joint PD gains are **zeroed** (``actuators[...].stiffness = 0.0``); all compliance comes from the
-        task-space stiffness above, so the controller — not the joint servo — sets the contact behavior.
-      * The action is applied at the **flange**, while ``eef_pos`` is observed at the **TCP**. Observation and
-        control therefore use different frames by design; the real-robot bridge must reproduce that split.
+      * The arm's joint PD gains are **zeroed**. The Newton profile uses ``IdealPDActuatorCfg`` groups with
+        zero stiffness and damping, so all commanded compliance comes from OSC. Native Newton enforces effort
+        saturation; the configured joint velocity limit requests a solver-side clamp.
+      * The action is applied at the **flange**. PhysX observes the TCP and therefore requires the real-robot bridge
+        to reproduce that frame split; Newton observes and controls the flange.
 
-**Action scale:** ``0.025`` in both cases — read as radians per joint per step in joint space, and as metres /
-radians per step in task space.
+**Action scale:** joint-space and PhysX task-space actions use ``0.025``. Newton task-space translation uses
+``[0.025, 0.025, 0.010]`` m while rotation uses ``0.025`` rad.
 
 .. figure:: ../_static/images/displayport/dp_action_pipeline.png
    :align: center
 
    Task-space action pipeline: scaled pose delta, task-space controller, joint targets, and robot response.
 
-**Control frequency:** ``sim.dt = 1/240`` s with ``decimation = 8`` → 30 Hz policy rate, identical in both
-control spaces.
+**Control frequency:** the PhysX profiles use ``sim.dt = 1/240`` s with ``decimation = 8`` (30 Hz policy rate).
+The Newton profile uses a 100 Hz outer step with ``decimation = 3`` (33.3 Hz policy rate).
 
 Domain Randomization Strategy
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -510,7 +525,8 @@ Domain Randomization Strategy
             "anneal_end_iter": 500.0,
             "num_steps_per_env": 512,
             "insertion_axis": [1.0, 0.0, 0.0],
-            "at_goal_depth_range": [0.0, 0.015],      # 0–15 mm engaged
+            "at_goal_depth_range": [0.0, 0.01316],    # seat to 15 mm from goal keypoint
+            "at_goal_seat_offset": [0.00184, 0.0, -0.0006],
             "approach_depth_range": [0.02, 0.06],     # 20–60 mm approach
             "normal_pose_range": {
                 "x": [-0.02, 0.02],
@@ -520,7 +536,10 @@ Domain Randomization Strategy
         },
     )
 
-At the start of training, 80% of resets place the plug near the inserted pose; this probability linearly anneals to 0% over 500 training iterations, forcing the policy to learn full approach and insertion.
+At the start of training, 80% of resets place the plug between the physical seat and the partially inserted pose. The
+socket-frame seat offset prevents those resets from starting inside the collision geometry while leaving the reward
+and observation keypoint unchanged. This probability linearly anneals to 0% over 500 training iterations, forcing the
+policy to learn full approach and insertion.
 
 .. figure:: ../_static/images/displayport/dp_curriculum.png
    :align: center
@@ -639,10 +658,10 @@ If the policy approaches but does not fully seat the plug, try increasing the ex
 
    Reward terms over training for the DisplayPort policy.
 
-Reset Curriculum
-~~~~~~~~~~~~~~~~
+Task-Space Reset Curriculum
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Defined in ``config/displayport_rizon_4s/joint_pos_env_cfg.py`` → ``reset_plug_curriculum``.
+Defined in ``config/displayport_rizon_4s/task_space_env_cfg.py`` → ``reset_plug_curriculum``.
 
 .. list-table:: Curriculum hyperparameters
    :widths: 35 20 45
@@ -658,8 +677,11 @@ Defined in ``config/displayport_rizon_4s/joint_pos_env_cfg.py`` → ``reset_plug
      - ``500``
      - Training iterations over which at-goal probability anneals. Extend (e.g. 800–1000) if success rate drops when curriculum gets harder; shorten if training is too slow to reach approach poses.
    * - ``at_goal_depth_range``
-     - ``[0.0, 0.015]`` m
-     - How deep the plug starts when sampled "at goal" (0–15 mm engaged). Narrow for fine final-insertion practice; widen slightly if the policy never sees near-mated contacts.
+     - ``[0.0, 0.01316]`` m from the physical seat
+     - How far the plug starts from the seat along the insertion axis. Together with the seat offset, this covers 1.84–15 mm from the reward keypoint without spawning below the physical seat.
+   * - ``at_goal_seat_offset``
+     - ``[0.00184, 0.0, -0.0006]`` m
+     - Socket-frame displacement from the reward keypoint to the measured physical seat. Revalidate this value if the plug or socket geometry changes.
    * - ``approach_depth_range``
      - ``[0.02, 0.06]`` m
      - Standoff distance when not at goal (20–60 mm). Increase upper bound for harder long-range approach; decrease if the policy struggles to reach the socket mouth.
@@ -761,9 +783,9 @@ Defined in ``config/displayport_rizon_4s/agents/rsl_rl_ppo_cfg.py``.
    * - ``desired_kl``
      - ``0.008``
      - Target KL for adaptive LR schedule.
-   * - ``init_noise_std``
+   * - ``actor.distribution_cfg.init_std``
      - ``1.0``
-     - Exploration noise. Lower for fine-tuning a near-working policy.
+     - Exploration noise. Override with ``agent.actor.distribution_cfg.init_std=<value>`` when fine-tuning.
 
 **Suggested tuning order:** (1) confirm asset/physics quality, (2) curriculum depth and anneal schedule, (3) linear vs exponential reward balance, (4) socket pose DR and observation noise, (5) action scale, (6) PPO training length.
 
@@ -787,6 +809,12 @@ exported and deployed with Isaac ROS without swapping configurations.
 
    * - Environment ID
      - Purpose
+   * - ``IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-ROS-Inference``
+     - **Newton task-space training and deployment — recommended Newton id.** Carries the ROS / LEAPP export contract.
+   * - ``IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton``
+     - Newton task-space training without deployment metadata (ablations, experiments)
+   * - ``IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-Play``
+     - Deterministic Newton evaluation / visualization (observation corruption disabled)
    * - ``IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference``
      - **Task-space training and deployment — recommended.** Carries the ROS / LEAPP export contract.
    * - ``IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace``
@@ -817,12 +845,133 @@ it against the matching ``-ROS-Inference`` id so the traced layout matches deplo
    Training goes through Isaac Lab's packaged CLI (``uv run isaaclab train ...``), while DisplayPort
    export and inference use this repository's entry points
    (``uv run isaaclab-training-export`` and ``uv run isaaclab-training-play-policy-io``). Add
-   ``--extra leapp`` for LEAPP export and ``--group sim`` when you need the Isaac Sim dependency.
+   ``--group leapp`` for LEAPP export and ``--group sim`` when you need the Isaac Sim dependency.
 
 .. note::
 
    Training and play use the **unified RL entrypoints**. You must pass ``--rl_library rsl_rl``.
    This repository does not require an Isaac Lab source checkout.
+
+.. _newton-task-space-profile:
+
+Newton Task-Space Profile
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The Newton configuration is intentionally separate from the existing PhysX task-space configuration. The
+recommended fixed profile uses the stable Newton 1.6 release with:
+
+.. list-table:: Recommended Newton DisplayPort profile
+   :widths: 35 65
+   :header-rows: 1
+
+   * - Setting
+     - Value
+   * - Solver and contact model
+     - MJWarp with Newton CollisionPipeline point-SDF contacts and a 5 mm contact gap
+   * - Simulation rates
+     - 2 kHz solver, 200 Hz collision refresh, and 33.3 Hz policy
+   * - Parallel environments
+     - 256 per distributed rank (1,024 total on four ranks)
+   * - OSC
+     - Full inertial-dynamics decoupling enabled; task stiffness ``[300, 300, 300, 30, 30, 30]``; damping ratio ``[1, 1, 1, 1, 1, 1]``
+   * - Action and actuator contract
+     - Translation ``[0.025, 0.025, 0.010]`` m, rotation ``0.025`` rad, and zero-gain effort-bounded IdealPD arm actuators
+   * - Socket observation noise
+     - Uniform ±10 mm position error, sampled once and held for the episode
+   * - Reset curriculum
+     - Physical-seat at-goal resets with probability annealed from ``0.8`` to ``0`` over iterations 0–500
+
+Both the PhysX and Newton configurations inherit Isaac Lab's stock nominal Rizon 4s with Grav USD. The stock
+flange is a mass-only marker with zero authored inertia. Before Newton imports the scene, the task authors the same
+uniform-sphere inertia that Newton 1.6 previously generated as a fallback (density ``1000 kg/m^3``) and a valid
+principal-axis quaternion. A valid inertia supplied by a future robot USD is preserved. Run a portable one-iteration
+smoke with this default asset so the checkpoint and export contract initializes end to end:
+
+.. code-block:: bash
+
+    uv run isaaclab train --rl_library rsl_rl \
+        --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-ROS-Inference \
+        --num_envs 16 \
+        --max_iterations 1 \
+        --seed 123 \
+        --visualizer none \
+        physics=newton_sdf
+
+For full training, ``--num_envs`` is per rank. Keep it at 256 for the configured collision-buffer capacity; if
+you increase it,
+increase and validate ``max_triangle_pairs`` as well. For a visual smoke test, reduce ``--num_envs`` and select
+``--visualizer kit``. Rendering is independent of physics: ``none`` and ``kit`` only select the visualizer, while
+the Newton task id plus ``physics=newton_sdf`` selects the backend and physics profile.
+
+Run the complete four-GPU baseline with the same default nominal USD by omitting
+``env.scene.robot.spawn.usd_path``:
+
+.. code-block:: bash
+
+    uv run isaaclab train_multigpu --num_gpus 4 \
+        --rl_library rsl_rl \
+        --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-ROS-Inference \
+        --num_envs 256 \
+        --seed 123 \
+        --visualizer none \
+        physics=newton_sdf
+
+For training that should match a particular physical arm, pass its corrected
+and requalified calibrated USD as an **absolute** path rather than changing the
+packaged default:
+
+.. code-block:: bash
+
+    uv run isaaclab train --rl_library rsl_rl \
+        --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-ROS-Inference \
+        --num_envs 256 \
+        --seed 123 \
+        --visualizer none \
+        physics=newton_sdf \
+        env.scene.robot.spawn.usd_path=/absolute/path/to/calibrated_rizon4s.usd
+
+Use the same absolute override when playing or exporting that checkpoint so asset-dependent configuration is
+resolved consistently.
+
+The nominal USD is the portable default, not an exact reproduction of the real-robot-best run. Reproduce that
+profile with seed ``123`` and the calibrated USD for the target arm. The same explicit flange-marker inertia check is
+applied to an overridden USD. Invalid mass or principal axes, a missing flange, or missing point-SDF collision
+meshes fail before training; valid calibrated inertia is never overwritten. Requalify any materially changed robot asset because full
+inertial decoupling consumes its mass matrix.
+
+.. important::
+
+   **Newton and PhysX task-space checkpoints are not interchangeable.** The Newton actor's flat observation ABI
+   is ``socket_pos`` first, followed by raw ``flange`` position, flange 6D rotation, and socket 6D rotation. The
+   existing PhysX actor is TCP-first: TCP position and 6D rotation, followed by socket position and rotation.
+   Both vectors contain 18 values, so using the wrong task id can load successfully while silently feeding every
+   field at the wrong offset. Always train, play, and export with task ids from the same backend family. LEAPP bundles
+   now include the policy ABI, backend, observed body/offset, action body/offset, and six-axis action scale so deployment
+   tooling can reject a mismatched frame contract.
+
+Play a Newton checkpoint with the matching deterministic task:
+
+.. code-block:: bash
+
+    uv run isaaclab play --rl_library rsl_rl \
+        --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-Play \
+        --checkpoint /absolute/path/to/model.pt \
+        --num_envs 1 \
+        --visualizer kit \
+        physics=newton_sdf
+
+For DisplayPort-specific socket overrides and ``policy_io.csv`` logging, use the dedicated inference command with
+the Newton ROS-inference id:
+
+.. code-block:: bash
+
+    uv run isaaclab-training-play-policy-io \
+        --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-ROS-Inference \
+        --checkpoint /absolute/path/to/model.pt \
+        --num_envs 1 \
+        --max_steps 200 \
+        --visualizer kit \
+        physics=newton_sdf
 
 Step 1: Visualize the Environment
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -839,8 +988,8 @@ for the control space you intend to deploy — task space is the recommended cho
 
           uv run isaaclab train --rl_library rsl_rl \
               --task IsaacTraining-DisplayPortInsertion-Rizon4s-Joint-NoJointVel-ROS-Inference \
-              --num_envs 4 \
-              --max_iterations 100 \
+              --num_envs 16 \
+              --max_iterations 1 \
               --visualizer kit
 
    .. tab-item:: Task space
@@ -849,9 +998,13 @@ for the control space you intend to deploy — task space is the recommended cho
 
           uv run isaaclab train --rl_library rsl_rl \
               --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference \
-              --num_envs 4 \
-              --max_iterations 100 \
+              --num_envs 16 \
+              --max_iterations 1 \
               --visualizer kit
+
+The default recurrent PPO configuration uses 16 minibatches, so training smokes must use at least 16 environments.
+For fewer visualized environments, use ``isaaclab play`` or set ``agent.algorithm.num_mini_batches`` no higher than
+``--num_envs``; otherwise empty minibatches produce invalid optimizer statistics.
 
 **What to Expect:**
 
@@ -901,6 +1054,13 @@ Launch full training in headless mode with video recording:
               --viz none \
               --video --video_length 200 --video_interval 76800
 
+The full-scale commands above use the nominal Rizon 4s USD. To train either
+PhysX control space for a calibrated arm, append its absolute USD override:
+
+.. code-block:: text
+
+    env.scene.robot.spawn.usd_path=/absolute/path/to/calibrated_rizon4s.usd
+
 **Multi-GPU (distributed) training** — for example on a cluster / OSMO workflow, launch the packaged Isaac Lab
 trainer under your cluster's distributed wrapper and keep ``--distributed`` in the Isaac Lab arguments:
 
@@ -922,7 +1082,7 @@ not intend to deploy.
 - ``--rl_library rsl_rl``: Selects the RSL-RL backend (required by the unified trainer)
 - ``--num_envs 256``: Runs 256 parallel environments
 - ``--viz none``: Disables all visualizers for throughput (the unified entry point has no ``--headless`` flag;
-  pass ``--viz kit`` or ``--viz newton`` to enable a viewer)
+  pass ``--viz kit`` to enable the Kit viewer). The visualizer does not select the physics backend.
 - ``--video_length 200``: One episode per video (``episode_length_s / (sim.dt * decimation)`` ≈ 200 steps)
 - ``--video_interval 76800``: Records a video every 76,800 environment steps (~every 150 iterations with 512 steps/env)
 - ``--distributed``: Required when launching under ``torch.distributed.run``
@@ -955,8 +1115,9 @@ learning signal.
 Choosing a Control Space
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Both control spaces train with the same algorithm, reward, curriculum, and 30 Hz control rate; they differ only in
-what the policy outputs and what the real robot must reproduce.
+Both control spaces train with the same algorithm, reward, and curriculum. The PhysX profiles run the policy at
+30 Hz and the Newton task-space profile at 33.3 Hz; they also differ in what the policy outputs and which
+end-effector frame the real robot must reproduce.
 
 .. list-table::
    :widths: 20 40 40
@@ -970,13 +1131,13 @@ what the policy outputs and what the real robot must reproduce.
      - 6-DoF Cartesian pose delta (OSC)
    * - Actor observation
      - 14 dims (or 21 with ``joint_vel``)
-     - 18 dims (TCP pose + socket keypoint frame)
+     - 18 dims (PhysX TCP or Newton flange pose + socket keypoint frame)
    * - Real-robot requirement
      - Joint servo behavior must match sim; benefits from joint-level system identification
-     - Task-space bridge that reproduces the OSC contract and the TCP-observe / flange-control split
+     - Task-space bridge that reproduces the OSC contract and the backend-specific TCP/flange convention
    * - Training ids
-     - ``...-Joint-NoJointVel-ROS-Inference`` (deployable), ``...-Joint-NoJointVel``
-     - ``...-TaskSpace-ROS-Inference`` (deployable), ``...-TaskSpace``
+     - ``IsaacTraining-DisplayPortInsertion-Rizon4s-Joint-NoJointVel-ROS-Inference`` (deployable), ``IsaacTraining-DisplayPortInsertion-Rizon4s-Joint-NoJointVel``
+     - PhysX: ``IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference``; Newton: ``IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-ROS-Inference``
 
 **Task space is the recommended route.** In our sim-to-real testing on the Flexiv Rizon 4s, task-space policies
 transfer better than joint-space ones: commanding a Cartesian pose delta keeps the policy independent of the arm's
@@ -1026,7 +1187,9 @@ Step 3: Export and Deploy on Real Robot
 Export from the ``-ROS-Inference`` task id so the traced observation and action layout matches deployment. If
 you followed the training steps above this is the same id you trained on, and no configuration swap is needed. In
 joint space that is a **NoJointVel** variant (14-dim actor input); in task space it is
-``-TaskSpace-ROS-Inference`` (18-dim actor input).
+``IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference`` for PhysX or
+``IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-ROS-Inference`` for Newton (both are 18-dim but have
+different internal semantics). Do not export a Newton checkpoint against the PhysX task or vice versa.
 
 Export with LEAPP (Recommended)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -1044,12 +1207,14 @@ Export with LEAPP (Recommended)
    LEAPP annotations mark the deployable input/output tensors inside the Isaac Lab pipeline.
 
 **Prerequisites:** a trained checkpoint, and the ``leapp`` optional dependency. With ``uv`` it is
-pulled in by the ``leapp`` extra, so no separate install step is needed — just pass
-``--extra leapp`` on the export command. In a self-managed environment, install it directly:
+pulled in by the ``leapp`` dependency group, so no separate install step is needed when you use
+``uv run --group leapp``. In a self-managed environment, install the validated
+NVIDIA-hosted release explicitly; public PyPI currently resolves an older exporter
+that does not preserve this task's observation contract:
 
 .. code-block:: bash
 
-    pip install leapp
+    python -m pip install --extra-index-url https://pypi.nvidia.com "leapp==0.6.1"
 
 **Export the policy:**
 
@@ -1061,7 +1226,7 @@ pulled in by the ``leapp`` extra, so no separate install step is needed — just
 
       .. code-block:: bash
 
-          uv run --extra leapp isaaclab-training-export \
+          uv run --group leapp isaaclab-training-export \
               --task IsaacTraining-DisplayPortInsertion-Rizon4s-Joint-NoJointVel-ROS-Inference \
               --checkpoint logs/rsl_rl/displayport_insertion_rizon4s/<run_timestamp>/model_<iteration>.pt
 
@@ -1069,14 +1234,29 @@ pulled in by the ``leapp`` extra, so no separate install step is needed — just
 
       Uses the DisplayPort task-space contract (see :ref:`export-taskspace-leapp`):
 
-      .. code-block:: bash
+      .. tab-set::
 
-          uv run --extra leapp isaaclab-training-export \
-              --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference \
-              --checkpoint logs/rsl_rl/displayport_insertion_rizon4s/<run_timestamp>/model_<iteration>.pt \
-              --contract displayport_task_space
+         .. tab-item:: PhysX
 
-Replace ``<run_timestamp>`` and ``<iteration>`` with your training log path.
+            .. code-block:: bash
+
+               uv run --group leapp isaaclab-training-export \
+                   --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference \
+                   --checkpoint logs/rsl_rl/displayport_insertion_rizon4s/<run_timestamp>/model_<iteration>.pt \
+                   --contract displayport_task_space
+
+         .. tab-item:: Newton
+
+            .. code-block:: bash
+
+               uv run --group leapp isaaclab-training-export \
+                   --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-ROS-Inference \
+                   --checkpoint logs/rsl_rl/displayport_insertion_rizon4s_newton_osc/<run_timestamp>/model_<iteration>.pt \
+                   --contract displayport_task_space \
+                   physics=newton_sdf
+
+Replace ``<run_timestamp>`` and ``<iteration>`` with your training log path. For a Newton checkpoint trained with a
+calibrated USD, repeat its absolute ``env.scene.robot.spawn.usd_path=...`` override on the export command.
 
 By default, export artifacts are written next to the checkpoint:
 
@@ -1113,8 +1293,11 @@ and write ``policy_io.csv`` for sim/real overlay:
         --log_dir logs/dp_inference_runs \
         --visualizer kit
 
-where ``<ROS_INFERENCE_TASK_ID>`` is ``...-Joint-NoJointVel-ROS-Inference`` for a joint-space export or
-``...-TaskSpace-ROS-Inference`` for a task-space one.
+where ``<ROS_INFERENCE_TASK_ID>`` is
+``IsaacTraining-DisplayPortInsertion-Rizon4s-Joint-NoJointVel-ROS-Inference`` for a joint-space export or
+``IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference`` for a PhysX task-space export. For Newton, use
+``IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-ROS-Inference`` and append ``physics=newton_sdf`` plus
+the same calibrated-USD override used for training and export, if any.
 
 ``--leapp_model`` accepts either the LEAPP deploy YAML or the export directory that
 contains it. Pose overrides and CSV logging still apply. Do not combine
@@ -1187,15 +1370,19 @@ The ROS inference environments define the deployment metadata LEAPP traces durin
 
    .. tab-item:: Task space
 
-      ``IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference``
+      PhysX uses ``IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference``; Newton uses
+      ``IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-ROS-Inference``.
 
       - ``obs_order``: ``["eef_pos", "eef_rot_6d", "socket_kp_pos", "socket_kp_rot_6d"]``
       - ``policy_action_space``: ``"task"`` (``pose_rel``)
       - ``observation_space``: 18
       - ``action_space``: 6
-      - ``action_scale``: 0.025 (metres for translation, radians for rotation)
+      - PhysX ``action_scale``: ``0.025`` (metres for translation, radians for rotation)
+      - Newton ``action_scale``: translation ``[0.025, 0.025, 0.010]`` m and rotation ``0.025`` rad
 
-      Fixed deployment poses are set in ``config/displayport_rizon_4s/task_space_ros_inference_env_cfg.py``.
+      Fixed deployment poses are set in ``task_space_ros_inference_env_cfg.py`` for PhysX and
+      ``task_space_newton_ros_inference_env_cfg.py`` for Newton. The canonical LEAPP ports are EEF-first for both;
+      the Newton export contract reconstructs the checkpoint's socket-first internal actor vector.
 
 .. _export-taskspace-leapp:
 
@@ -1207,13 +1394,28 @@ A **task-space** checkpoint is exported with the packaged exporter and the
 targets. The same exporter stays task-agnostic by loading task-specific contracts from
 ``src/isaaclab_training/export/contracts.py``:
 
-.. code-block:: bash
+.. tab-set::
 
-    uv run --extra leapp isaaclab-training-export \
-        --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference \
-        --checkpoint logs/rsl_rl/displayport_insertion_rizon4s/<run_timestamp>/model_<iteration>.pt \
-        --export_save_path <output_dir> \
-        --contract displayport_task_space
+   .. tab-item:: PhysX
+
+      .. code-block:: bash
+
+          uv run --group leapp isaaclab-training-export \
+              --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference \
+              --checkpoint logs/rsl_rl/displayport_insertion_rizon4s/<run_timestamp>/model_<iteration>.pt \
+              --export_save_path <output_dir> \
+              --contract displayport_task_space
+
+   .. tab-item:: Newton
+
+      .. code-block:: bash
+
+          uv run --group leapp isaaclab-training-export \
+              --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-ROS-Inference \
+              --checkpoint logs/rsl_rl/displayport_insertion_rizon4s_newton_osc/<run_timestamp>/model_<iteration>.pt \
+              --export_save_path <output_dir> \
+              --contract displayport_task_space \
+              physics=newton_sdf
 
 The export writes a ``DisplayPortTaskSpace`` LEAPP package (``.onnx`` graph, ``.yaml`` semantics, and
 ``_initial_values.safetensors`` for the recurrent state). Its I/O contract is:
@@ -1222,8 +1424,9 @@ The export writes a ``DisplayPortTaskSpace`` LEAPP package (``.onnx`` graph, ``.
 - **Output:** ``arm_action`` (6) — a ``pose_rel`` Cartesian delta ``[dx, dy, dz, dθx, dθy, dθz]`` consumed by the
   task-space bridge (``isaaclab_connection: action:arm_action:pose_rel``).
 
-Validate it exactly as for the joint-space export above with ``isaaclab-training-play-policy-io`` and
-``--leapp_model`` pointing at the exported directory.
+Validate it with ``isaaclab-training-play-policy-io`` and ``--leapp_model`` pointing at the exported directory. Use
+the matching PhysX or Newton ROS-inference task id; for Newton, also pass ``physics=newton_sdf`` and the calibrated
+USD override used to train the checkpoint.
 
 Alternative: Raw Checkpoint Deployment
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

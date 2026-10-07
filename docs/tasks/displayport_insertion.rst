@@ -544,6 +544,81 @@ At the start of training, 80% of resets place the plug near the inserted pose; t
         },
     )
 
+**Toggleable domain randomization and ADR** (task-space tasks only) is configured through ``env.dr``
+(``domain_rand_cfg.py``). Every knob is off by default, so the unrandomized task is unchanged. The knobs are
+expanded into event, observation, action and curriculum terms when the environment is built, after ``env.*``
+command-line overrides are applied:
+
+.. code-block:: bash
+
+    uv run isaaclab train --rl_library rsl_rl \
+      --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference \
+      env.dr.enabled=true env.dr.adr.enable=true \
+      env.dr.socket_pos.enable=true env.dr.obs_socket_pos.enable=true \
+      env.actions.arm_action.payload_gravity_compensation=true
+
+Each knob has an ``initial`` range (ADR level 0, or the whole run without ADR) and a ``final`` range (level 50):
+
+.. list-table::
+   :header-rows: 1
+
+   * - Knob
+     - Level 0 → level 50
+     - Notes
+   * - ``osc_stiffness`` / ``osc_damping_ratio``
+     - ×1 → ×[0.5, 1.0] / ×1 → ×[1.0, 1.5], log-uniform
+     - Softer and more damped only: 1.1× stiffness or 0.9× damping makes insertion contact blow up.
+   * - ``joint_armature``
+     - 0 → [0.1, 0.2] kg·m²
+     - Absolute; the asset ships 0.
+   * - ``joint_friction``
+     - 0 → [0, 0.05]
+     - Dry friction only (PhysX dimensionless coefficient; Newton N·m); viscous damping is untouched.
+   * - ``finger_friction`` / ``mating_friction``
+     - 0.75 → [0.4, 1.1] / 0.001 → 0.001
+     - Mating friction is identity by default; widen it as a separate experiment.
+   * - ``plug_mass``
+     - ×1 → ×[0.5, 2.0]
+     -
+   * - ``grasp_pos`` / ``grasp_rot``
+     - 0 → ±2 mm / 0 → ±2° per axis
+     - Sampled once per reset.
+   * - ``socket_pos`` / ``socket_rot``
+     - ±(5, 5, 10) mm → ±30 mm / ±1° → ±5°
+     - Replaces only the enabled components of the task's socket range.
+   * - ``obs_socket_pos`` / ``obs_eef_pos``
+     - 0 → 5 mm episode bias + 0.5 mm step noise
+     - Bias-dominated (one-shot perception, TCP calibration).
+   * - ``obs_eef_rot`` / ``obs_socket_rot``
+     - 0 → 2° episode bias
+     - Composed on SO(3) and re-encoded as a valid 6D rotation.
+   * - ``action_noise`` / ``action_latency``
+     - 0 → 0.005 bias + 0.01 noise (action units) / 0 → 3–4 policy steps
+     -
+   * - ``plug_wrench_force``
+     - 0 → [-0.6, 0.6] N per axis, resampled every 0.5–2 s
+     - Stands in for the cable tug.
+
+ADR (``env.dr.adr``) raises one global level by one when the smoothed terminal success rate of episodes that
+started at the approach pose exceeds 0.4 and at least 5 episodes' worth of steps have passed; it never demotes.
+The level is saved beside every checkpoint (``model_N.adr_state.json``) and restored on resume.
+
+``env.actions.arm_action.payload_gravity_compensation=true`` adds the joint torques that hold up the plug's
+weight. The task-space arm is gravity-free but the plug is not, and without compensation the gripper sinks
+about 29 mm in 5 s under zero actions, unlike the real robot's position servo.
+
+Resuming with ``--checkpoint`` goes through ``isaaclab_training.utils.rsl_rl_hooks``. A resumed run continues
+at the iteration after the checkpoint, keeps the checkpoint's learning rate, and restores the ADR level and
+the at-goal anneal position. Without the learning-rate fix, PPO's adaptive schedule restarted at the config
+value and resumed runs collapsed.
+
+Findings from DR sweeps (2 GPUs × 2048 environments):
+
+* Runs with the near-goal reset curriculum disabled (``env.events.reset_plug_curriculum.params.at_goal_prob=0.0``)
+  solved almost every single-knob variant at level 50; with it enabled most stalled.
+* A state-independent action std (``agent.policy.state_dependent_std=false``) avoided the std blow-up
+  (per-state std reached 1e12) seen with the default per-state std.
+
 Reward Shaping
 ~~~~~~~~~~~~~~
 

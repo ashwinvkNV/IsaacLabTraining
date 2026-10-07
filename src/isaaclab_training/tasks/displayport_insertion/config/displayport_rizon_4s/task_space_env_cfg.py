@@ -33,6 +33,8 @@ from isaaclab_training.tasks.displayport_insertion.displayport_insertion_env_cfg
 )
 
 from .agents.rsl_rl_ppo_cfg import TASK_SPACE_NUM_STEPS_PER_ENV
+from .domain_rand import apply_domain_randomization
+from .domain_rand_cfg import DomainRandCfg
 from .joint_pos_env_cfg import (
     _PLUG_ROOT,
     _PLUG_ROT,
@@ -332,6 +334,9 @@ class TaskSpaceTerminationsCfg:
 class Rizon4sTaskSpaceDisplayportInsertionEnvCfg(DisplayportInsertionEnvCfg):
     """Task-space DisplayPort insertion with OSC control, 6D observations, and curriculum."""
 
+    dr: DomainRandCfg = DomainRandCfg()
+    """Toggleable domain randomization. Off by default; see :mod:`.domain_rand_cfg`."""
+
     def __post_init__(self):
         super().__post_init__()
 
@@ -367,6 +372,10 @@ class Rizon4sTaskSpaceDisplayportInsertionEnvCfg(DisplayportInsertionEnvCfg):
             ),
             position_scale=_ACTION_SCALE,
             orientation_scale=_ACTION_SCALE,
+            # Off by default. Enable with env.actions.arm_action.payload_gravity_compensation=true
+            # to cancel the grasped plug's weight, which otherwise makes the gripper sink under
+            # zero actions (the real robot's stiff position servo holds its target instead).
+            payload_asset_name="dp_plug",
         )
 
         # ----- Events -----
@@ -498,6 +507,16 @@ class Rizon4sTaskSpaceDisplayportInsertionEnvCfg(DisplayportInsertionEnvCfg):
 
         # Use 1:1 linear:exponential keypoint-tracking reward weighting.
         self.rewards.plug_socket_keypoint_tracking_exp.weight = abs(self.rewards.plug_socket_keypoint_tracking.weight)
+
+    def apply_domain_randomization(self) -> None:
+        """Expand :attr:`dr` into event, observation, action and curriculum terms.
+
+        Deliberately not called from ``__post_init__``: Isaac Lab applies ``env.*`` CLI
+        overrides *after* the config is constructed, so randomization wired during
+        ``__post_init__`` would never see them. The environment calls this instead, after
+        overrides have landed and before the managers are built.
+        """
+        apply_domain_randomization(self)
 
     def play_mode(self):
         """Apply playback overrides on top of the shared Isaac Lab defaults.

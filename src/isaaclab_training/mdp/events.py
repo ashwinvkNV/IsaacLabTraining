@@ -533,6 +533,9 @@ class set_robot_to_object_grasp_pose(ManagerTermBase):
         pos_randomization_range: Optional dict with keys ``"x"``, ``"y"``,
             ``"z"`` mapping to ``(low, high)`` tuples [m] for per-reset
             randomization of the grasp offset.
+        rot_randomization_range: Optional dict with keys ``"roll"``, ``"pitch"``,
+            ``"yaw"`` mapping to ``(low, high)`` tuples [rad] for per-reset
+            randomization of the grasp orientation.
     """
 
     def __init__(self, cfg: EventTermCfg, env: ManagerBasedEnv):
@@ -592,6 +595,7 @@ class set_robot_to_object_grasp_pose(ManagerTermBase):
         rot_threshold: float = 1e-6,
         max_iterations: int = 50,
         pos_randomization_range: dict | None = None,
+        rot_randomization_range: dict | None = None,
         target_object_name: str | None = None,
         grasp_offset: list | None = None,
         end_effector_body_name: str | None = None,
@@ -602,6 +606,17 @@ class set_robot_to_object_grasp_pose(ManagerTermBase):
         num_reset_envs = len(env_ids)
         grasp_offsets = self.grasp_offsets_buffer[:num_reset_envs]
         grasp_rot_offset_tensor = self.grasp_rot_offset_tensor[env_ids]
+
+        # Perturb how the plug sits in the gripper. The plug is snapped to the achieved
+        # hand pose below, so without this it is held identically every episode.
+        if rot_randomization_range is not None:
+            rpy_ranges = torch.tensor(
+                [rot_randomization_range.get(key, (0.0, 0.0)) for key in ("roll", "pitch", "yaw")],
+                device=env.device,
+            )
+            rpy = math_utils.sample_uniform(rpy_ranges[:, 0], rpy_ranges[:, 1], (num_reset_envs, 3), device=env.device)
+            perturbation = math_utils.quat_from_euler_xyz(rpy[:, 0], rpy[:, 1], rpy[:, 2])
+            grasp_rot_offset_tensor = math_utils.quat_mul(grasp_rot_offset_tensor, perturbation)
 
         # One-shot debug log to confirm the event fires and report IK convergence.
         # Remove or guard once the grasp wiring is verified.
@@ -835,6 +850,13 @@ class reset_plug_at_goal_curriculum(ManagerTermBase):
 
         self.identity_quat = torch.tensor([0.0, 0.0, 0.0, 1.0], device=env.device, dtype=torch.float32)
 
+        self.spawned_at_goal = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+        """Whether each environment's current episode started with the plug already at the goal.
+
+        Such episodes begin partially inserted, so a success-driven curriculum should not score
+        them as evidence that the policy can insert.
+        """
+
     def _current_at_goal_prob(self, env: ManagerBasedEnv) -> float:
         """Return the at-goal probability for the current training progress.
 
@@ -873,6 +895,11 @@ class reset_plug_at_goal_curriculum(ManagerTermBase):
         at_goal_seat_offset: list | None = None,
     ):
         num_envs = len(env_ids)
+
+        # Take the probabilities from the live params rather than the values cached at
+        # construction, so a curriculum that rewrites them at runtime takes effect.
+        self.at_goal_prob = at_goal_prob
+        self.at_goal_prob_final = at_goal_prob_final
 
         socket_pos = wp.to_torch(self.socket.data.root_pos_w)[env_ids]
         socket_quat = wp.to_torch(self.socket.data.root_quat_w)[env_ids]
@@ -918,8 +945,10 @@ class reset_plug_at_goal_curriculum(ManagerTermBase):
             plug_pos = normal_plug_pos.clone()
             plug_quat = normal_plug_quat.clone()
 
+            self.spawned_at_goal[env_ids] = False
             if current_at_goal_prob > 0.0 and num_envs > 0:
                 at_goal_mask = torch.rand(num_envs, device=env.device) < current_at_goal_prob
+                self.spawned_at_goal[env_ids] = at_goal_mask
                 at_goal_local = at_goal_mask.nonzero(as_tuple=False).squeeze(-1)
                 num_at_goal = int(at_goal_local.numel())
                 if num_at_goal > 0:
@@ -934,6 +963,7 @@ class reset_plug_at_goal_curriculum(ManagerTermBase):
                     plug_quat[at_goal_local] = goal_quat_w[at_goal_local]
         else:
             at_goal_mask = torch.rand(num_envs, device=env.device) < current_at_goal_prob
+            self.spawned_at_goal[env_ids] = at_goal_mask
 
             at_goal_range = (
                 self.at_goal_depth_range if self.at_goal_depth_range is not None else [0.0, self.insertion_length]

@@ -24,6 +24,24 @@ def _keypoint_offsets_6d(device: torch.device) -> torch.Tensor:
     return torch.cat((corners, -corners[-3:]), dim=0)
 
 
+_MIN_TRIANGLE_PAIRS = 2**20
+
+
+def _scale_newton_triangle_pairs(cfg) -> None:
+    """Size Newton's scene-wide triangle-pair buffer from the final environment count.
+
+    ``max_triangle_pairs`` is one buffer shared by all environments, while ``scene.num_envs`` is
+    usually overridden after the config is built. Configs that set
+    ``newton_triangle_pairs_per_env`` get ``per_env * num_envs`` (at least 2^20) here, before the
+    simulation is created.
+    """
+    per_env = getattr(cfg, "newton_triangle_pairs_per_env", None)
+    collision_cfg = getattr(cfg.sim.physics, "collision_cfg", None)
+    if per_env is None or collision_cfg is None:
+        return
+    collision_cfg.max_triangle_pairs = max(_MIN_TRIANGLE_PAIRS, int(per_env) * cfg.scene.num_envs)
+
+
 class DisplayportInsertionEnv(ManagerBasedRLEnv):
     """Manager-based RL env that logs insertion success metrics during training.
 
@@ -36,6 +54,7 @@ class DisplayportInsertionEnv(ManagerBasedRLEnv):
     """
 
     def __init__(self, cfg, render_mode: str | None = None, **kwargs):
+        _scale_newton_triangle_pairs(cfg)
         super().__init__(cfg, render_mode=render_mode, **kwargs)
 
         self._log_success_metrics: bool = bool(getattr(cfg, "log_success_metrics", True))

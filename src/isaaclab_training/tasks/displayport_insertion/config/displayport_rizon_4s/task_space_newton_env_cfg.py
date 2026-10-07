@@ -49,7 +49,13 @@ _OSC_ORIENTATION_SCALE = 0.025
 _OSC_STIFFNESS = (300.0, 300.0, 300.0, 30.0, 30.0, 30.0)
 _OSC_DAMPING_RATIO = (1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
 _NEWTON_NUM_ENVS = 256
-_NEWTON_MAX_TRIANGLE_PAIRS = 2**25
+# _NEWTON_MAX_TRIANGLE_PAIRS = 2**25
+# Collision / constraint capacities, sized at ~2x the peaks measured over scripted insertion, seated, carry,
+# curriculum resets and policy rollouts: 6.4k triangle pairs / env (mostly the always-on finger-plug grasp),
+# 382 contacts / env and 564 constraint rows / world. MJWarp and Newton drop rows past these limits silently.
+_NEWTON_TRIANGLE_PAIRS_PER_ENV = 12288
+_NEWTON_NCONMAX = 1024
+_NEWTON_NJMAX = 2048
 _FLANGE_FALLBACK_DENSITY = 1000.0
 
 _LOGGER = logging.getLogger(__name__)
@@ -221,8 +227,10 @@ class DisplayportNewtonPhysicsCfg(PresetCfg):
         solver_cfg=MJWarpSolverCfg(
             solver="newton",
             integrator="implicitfast",
-            njmax=8192,
-            nconmax=8192,
+            # njmax=8192,
+            # nconmax=8192,
+            njmax=_NEWTON_NJMAX,
+            nconmax=_NEWTON_NCONMAX,
             iterations=100,
             ls_iterations=50,
             update_data_interval=10,
@@ -233,10 +241,11 @@ class DisplayportNewtonPhysicsCfg(PresetCfg):
         ),
         collision_cfg=NewtonCollisionPipelineCfg(
             reduce_contacts=True,
-            # Scene-wide candidate-pair capacity for the 256-environment default.
-            # If this overflows, Newton warns and may omit candidate contacts;
-            # increase it when increasing environment count or mesh complexity.
-            max_triangle_pairs=_NEWTON_MAX_TRIANGLE_PAIRS,
+            # Scene-wide candidate-pair capacity. DisplayportInsertionEnv sets it to
+            # newton_triangle_pairs_per_env x num_envs once the final env count is known.
+            # If this overflows, Newton warns and may omit candidate contacts.
+            # max_triangle_pairs=_NEWTON_MAX_TRIANGLE_PAIRS,
+            max_triangle_pairs=_NEWTON_TRIANGLE_PAIRS_PER_ENV * _NEWTON_NUM_ENVS,
         ),
         num_substeps=20,
         collision_decimation=10,
@@ -316,6 +325,9 @@ class Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg(Rizon4sTaskSpaceDisplaypo
     robot that will execute the policy.
     """
 
+    newton_triangle_pairs_per_env: int | None = _NEWTON_TRIANGLE_PAIRS_PER_ENV
+    """Narrow-phase triangle-pair capacity per environment; the scene-wide buffer is this x num_envs."""
+
     def __post_init__(self) -> None:
         super().__post_init__()
 
@@ -327,8 +339,8 @@ class Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg(Rizon4sTaskSpaceDisplaypo
         # Use Newton-native actuator execution. Zero joint gains preserve direct
         # OSC effort control while effort saturation and solver limits remain active.
         self.sim.use_newton_actuators = True
-        # The collision candidate-pair capacity is scene-wide and supports this
-        # per-rank default. Scale the capacity when increasing this value.
+        # The scene-wide triangle-pair capacity follows the final env count
+        # (newton_triangle_pairs_per_env); nconmax / njmax are per world.
         self.scene.num_envs = _NEWTON_NUM_ENVS
         self.decimation = 3
         self.sim.render_interval = self.decimation

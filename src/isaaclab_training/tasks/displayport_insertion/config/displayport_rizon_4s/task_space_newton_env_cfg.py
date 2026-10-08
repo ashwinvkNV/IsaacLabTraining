@@ -56,6 +56,10 @@ _NEWTON_NUM_ENVS = 256
 _NEWTON_TRIANGLE_PAIRS_PER_ENV = 12288
 _NEWTON_NCONMAX = 1024
 _NEWTON_NJMAX = 2048
+# Contact detection distance [m] for every shape (detection only, no inflation). It must cover how far surfaces
+# close between collision passes (every 10 substeps = 5 ms). 5 mm made the always-on finger-plug grasp produce
+# 5.7k triangle pairs / env; 2 mm halves that (3.2k) and the narrow phase with it. 1 mm was not faster.
+_NEWTON_CONTACT_GAP = 0.002
 _FLANGE_FALLBACK_DENSITY = 1000.0
 
 _LOGGER = logging.getLogger(__name__)
@@ -205,7 +209,8 @@ def _newton_sdf_properties(
     }
     for prim_path in sdf_prim_paths:
         properties[prim_path] = [
-            NewtonCollisionCfg(contact_margin=0.0, contact_gap=0.005),
+            # NewtonCollisionCfg(contact_margin=0.0, contact_gap=0.005),
+            NewtonCollisionCfg(contact_margin=0.0, contact_gap=_NEWTON_CONTACT_GAP),
             NewtonSDFCollisionCfg(
                 sdf_max_resolution=256,
                 sdf_narrow_band_inner=-0.005,
@@ -249,7 +254,8 @@ class DisplayportNewtonPhysicsCfg(PresetCfg):
         ),
         num_substeps=20,
         collision_decimation=10,
-        default_shape_cfg=NewtonShapeCfg(gap=0.005),
+        # default_shape_cfg=NewtonShapeCfg(gap=0.005),
+        default_shape_cfg=NewtonShapeCfg(gap=_NEWTON_CONTACT_GAP),
         debug_mode=False,
         use_cuda_graph=True,
     )

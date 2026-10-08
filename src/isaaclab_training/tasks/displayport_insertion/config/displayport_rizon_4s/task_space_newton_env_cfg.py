@@ -57,9 +57,12 @@ _NEWTON_TRIANGLE_PAIRS_PER_ENV = 12288
 _NEWTON_NCONMAX = 1024
 _NEWTON_NJMAX = 2048
 # Contact detection distance [m] for every shape (detection only, no inflation). It must cover how far surfaces
-# close between collision passes (every 10 substeps = 5 ms). 5 mm made the always-on finger-plug grasp produce
-# 5.7k triangle pairs / env; 2 mm halves that (3.2k) and the narrow phase with it. 1 mm was not faster.
-_NEWTON_CONTACT_GAP = 0.002
+# close between collision passes (every 10 substeps = 5 ms). 2 mm halves the grasp's narrow-phase work (5.7k ->
+# 3.2k triangle pairs / env, 1.5-1.9x env throughput) and passes every scripted / reset / eval physics test, but a
+# full training run at 2 mm learned at about half the rate of 5 mm (model_1000 approach-only eval 2.7 % vs 30.1 %,
+# same config and seed; terminal success 0.34 vs 0.67 from iteration 100), so 5 mm stays.
+# _NEWTON_CONTACT_GAP = 0.002
+_NEWTON_CONTACT_GAP = 0.005
 _FLANGE_FALLBACK_DENSITY = 1000.0
 
 _LOGGER = logging.getLogger(__name__)

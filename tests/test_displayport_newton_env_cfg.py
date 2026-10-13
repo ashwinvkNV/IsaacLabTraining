@@ -20,7 +20,7 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.utils.noise import UniformNoiseCfg
 from isaaclab_assets import FLEXIV_RIZON4S_GRAV_GRIPPER_CFG
 from isaaclab_newton.physics import MJWarpSolverCfg, NewtonCfg
-from isaaclab_newton.sim.schemas import NewtonCollisionCfg, NewtonSDFCollisionCfg
+from isaaclab_newton.sim.schemas import MujocoCollisionCfg, NewtonCollisionCfg, NewtonSDFCollisionCfg
 from isaaclab_physx.physics import PhysxCfg
 from isaaclab_physx.sim.schemas import PhysxCollisionCfg
 from isaaclab_tasks.utils.hydra import resolve_presets
@@ -621,11 +621,13 @@ def test_displayport_newton_timing_solver_and_point_sdf_assets():
     assert cfg.scene.dp_socket.spawn.usd_path == f"{DISPLAY_ASSETS_DIR}/displayport_socket_no_protrusions.usd"
     plug_sdf_paths = ("/collision_mesh",)
     socket_sdf_paths = tuple(f"/tn__2584N111_DisplayportCord_jP/Body{body_id}/Mesh" for body_id in (5, 6, 8, 12, 13))
+    # The socket outranks the plug, so plug-socket contacts use the socket's (low) friction instead of the
+    # element-wise maximum with the plug's grasp friction; the plug keeps the default priority.
     collision_fragment_sets = (
-        (cfg.scene.dp_plug.spawn.collision_props, 0.00001, -0.00005, plug_sdf_paths),
-        (cfg.scene.dp_socket.spawn.collision_props, 0.0001, -0.0001, socket_sdf_paths),
+        (cfg.scene.dp_plug.spawn.collision_props, 0.00001, -0.00005, plug_sdf_paths, None),
+        (cfg.scene.dp_socket.spawn.collision_props, 0.0001, -0.0001, socket_sdf_paths, 1),
     )
-    for mapping, contact_offset, rest_offset, sdf_paths in collision_fragment_sets:
+    for mapping, contact_offset, rest_offset, sdf_paths, priority in collision_fragment_sets:
         assert set(mapping) == {"/.*", *sdf_paths}
 
         physx_fragments = mapping["/.*"]
@@ -649,6 +651,11 @@ def test_displayport_newton_timing_solver_and_point_sdf_assets():
             assert sdf.sdf_padding == pytest.approx(0.005)
             assert sdf.hydroelastic_enabled is False
             assert sdf.hydroelastic_stiffness == pytest.approx(1.0e8)
+            mujoco = [fragment for fragment in fragments if isinstance(fragment, MujocoCollisionCfg)]
+            if priority is None:
+                assert mujoco == []
+            else:
+                assert len(mujoco) == 1 and mujoco[0].priority == priority
 
 
 def test_displayport_newton_osc_abi_robot_and_gravity_settings():

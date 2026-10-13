@@ -14,6 +14,7 @@ import math
 
 from isaaclab_newton.physics import MJWarpSolverCfg, NewtonCfg, NewtonCollisionPipelineCfg, NewtonShapeCfg
 from isaaclab_newton.sim.schemas import (
+    MujocoCollisionCfg,
     MujocoJointDrivePropertiesCfg,
     MujocoRigidBodyPropertiesCfg,
     NewtonCollisionCfg,
@@ -210,13 +211,20 @@ def _newton_sdf_properties(
     contact_offset: float,
     rest_offset: float,
     sdf_prim_paths: tuple[str, ...],
-) -> dict[str, list[PhysxCollisionCfg | NewtonCollisionCfg | NewtonSDFCollisionCfg]]:
-    """Create point-SDF properties only for meshes authored as SDF colliders."""
-    properties: dict[str, list[PhysxCollisionCfg | NewtonCollisionCfg | NewtonSDFCollisionCfg]] = {
+    contact_priority: int | None = None,
+) -> dict[str, list[PhysxCollisionCfg | NewtonCollisionCfg | NewtonSDFCollisionCfg | MujocoCollisionCfg]]:
+    """Create point-SDF properties only for meshes authored as SDF colliders.
+
+    ``contact_priority`` writes ``mjc:priority`` on the SDF colliders: MuJoCo then uses this collider's
+    contact parameters (friction, condim, solref/solimp) against lower-priority colliders instead of the
+    element-wise maximum of both.
+    """
+    properties: dict[str, list[PhysxCollisionCfg | NewtonCollisionCfg | NewtonSDFCollisionCfg | MujocoCollisionCfg]] = {
         "/.*": [PhysxCollisionCfg(contact_offset=contact_offset, rest_offset=rest_offset)]
     }
     for prim_path in sdf_prim_paths:
         properties[prim_path] = [
+            *([MujocoCollisionCfg(priority=contact_priority)] if contact_priority is not None else []),
             # NewtonCollisionCfg(contact_margin=0.0, contact_gap=0.005),
             NewtonCollisionCfg(contact_margin=0.0, contact_gap=_NEWTON_CONTACT_GAP),
             NewtonSDFCollisionCfg(
@@ -369,10 +377,15 @@ class Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg(Rizon4sTaskSpaceDisplaypo
             -0.00005,
             ("/collision_mesh",),
         )
+        # The socket outranks the plug in MuJoCo contact priority. Without it, MJWarp combines the two colliders'
+        # friction as the maximum, so the plug's grasp friction (3.0) also acted on the plug-socket contact and the
+        # plug jammed in the bore (scripted aligned insertions stalled 4-8 mm short of the seat). With priority the
+        # plug-socket contact uses the socket's friction (0.001, as in the PhysX task); finger-plug contacts keep 3.0.
         self.scene.dp_socket.spawn.collision_props = _newton_sdf_properties(
             0.0001,
             -0.0001,
             tuple(f"/tn__2584N111_DisplayportCord_jP/Body{body_id}/Mesh" for body_id in (5, 6, 8, 12, 13)),
+            contact_priority=1,
         )
 
         self.observations = NewtonTaskSpaceObservationsCfg()

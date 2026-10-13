@@ -578,7 +578,7 @@ def test_registered_displayport_newton_tasks_resolve_compatible_safe_defaults(ta
     assert isinstance(cfg.sim.physics, NewtonCfg)
     assert isinstance(cfg.actions.arm_action, DeployOperationalSpaceControllerActionCfg)
     assert cfg.scene.num_envs == expected_num_envs
-    assert cfg.sim.physics.collision_cfg.max_triangle_pairs == 2**25
+    assert cfg.sim.physics.collision_cfg.max_triangle_pairs == 12288 * 256
     assert runner.seed == 123
     assert runner.clip_actions == pytest.approx(1.0)
     cfg.validate()
@@ -612,7 +612,7 @@ def test_displayport_newton_timing_solver_and_point_sdf_assets():
     collision = physics.collision_cfg
     assert collision is not None
     assert collision.reduce_contacts is True
-    assert collision.max_triangle_pairs == 2**25
+    assert collision.max_triangle_pairs == 12288 * 256
 
     expected_default_asset_dir = f"{ISAAC_NUCLEUS_DIR}/Props/Factory/display_port_cable_assets"
     assert expected_default_asset_dir == _DISPLAY_ASSETS_DEFAULT_DIR
@@ -675,7 +675,7 @@ def test_displayport_newton_osc_abi_robot_and_gravity_settings():
     assert controller.inertial_dynamics_decoupling is True
     assert controller.partial_inertial_dynamics_decoupling is False
     assert controller.gravity_compensation is False
-    assert tuple(controller.motion_stiffness_task) == pytest.approx((300.0, 300.0, 300.0, 30.0, 30.0, 30.0))
+    assert tuple(controller.motion_stiffness_task) == pytest.approx((300.0,) * 6)
     assert tuple(controller.motion_damping_ratio_task) == pytest.approx((1.0,) * 6)
     assert controller.nullspace_control == "none"
 

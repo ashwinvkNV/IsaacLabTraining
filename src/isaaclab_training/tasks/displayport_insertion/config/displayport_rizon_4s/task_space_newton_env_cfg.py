@@ -46,7 +46,12 @@ from .task_space_env_cfg import Rizon4sTaskSpaceDisplayportInsertionEnvCfg, Task
 _ARM_JOINTS = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7"]
 _OSC_POSITION_SCALE = (0.025, 0.025, 0.010)
 _OSC_ORIENTATION_SCALE = 0.025
-_OSC_STIFFNESS = (300.0, 300.0, 300.0, 30.0, 30.0, 30.0)
+# _OSC_STIFFNESS = (300.0, 300.0, 300.0, 30.0, 30.0, 30.0)
+# With inertial_dynamics_decoupling=True the OSC gains are task-space accelerations [1/s^2], not N/m and N*m/rad
+# as in the PhysX task (decoupling off). The PhysX rotation gain of 30 therefore became a 30 rad/s^2-per-rad
+# command here: a rotation action realized ~1 % of its target per policy step while translation realized ~26 %,
+# so the policy could not control plug orientation. Use the translation gain on all six axes.
+_OSC_STIFFNESS = (300.0, 300.0, 300.0, 300.0, 300.0, 300.0)
 _OSC_DAMPING_RATIO = (1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
 _NEWTON_NUM_ENVS = 256
 # _NEWTON_MAX_TRIANGLE_PAIRS = 2**25

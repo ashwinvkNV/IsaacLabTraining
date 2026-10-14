@@ -1,42 +1,42 @@
-# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# Copyright (c) 2022-2026, The Isaac Lab Project Developers
+# (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-
 """Regression tests for the RSL-RL 5 recurrent runner configuration."""
 
 from __future__ import annotations
 
-import io
-import re
-import warnings
 from contextlib import redirect_stdout
 from copy import deepcopy
 from dataclasses import MISSING
+import io
 from pathlib import Path
+import re
+import warnings
 
-import torch
-from isaaclab_rl.rsl_rl import (
-    RslRlMLPModelCfg,
-    RslRlPpoActorCriticRecurrentCfg,
-    RslRlRNNModelCfg,
-    handle_deprecated_rsl_rl_cfg,
-)
+from isaaclab_rl.rsl_rl import (handle_deprecated_rsl_rl_cfg, RslRlMLPModelCfg,
+                                RslRlPpoActorCriticRecurrentCfg, RslRlRNNModelCfg)
+from isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s \
+    .agents.rsl_rl_ppo_cfg import \
+    Rizon4sGravDisplayportInsertionRNNPPORunnerCfg
 from rsl_rl.models import RNNModel
 from tensordict import TensorDict
-
-from isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s.agents.rsl_rl_ppo_cfg import (
-    Rizon4sGravDisplayportInsertionRNNPPORunnerCfg,
-)
+import torch
 
 _RSL_RL_VERSION = "5.4.1"
-_DOCUMENTATION_PATHS = (
-    Path("README.md"),
-    Path("docs/index.rst"),
-    Path("docs/setup_training.md"),
-    Path("docs/tasks/displayport_insertion.rst"),
-)
-_TRAIN_COMMAND_START = re.compile(r"^(?:uv\s+run(?:\s+\S+)*?\s+isaaclab|(?:\./)?isaaclab\.sh)\s+train\b")
+_PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+# The canonical training guides live in the Isaac ROS Manipulation documentation. Keep command
+# validation pointed at that single source instead of requiring a second package-level README.
+_TRAINING_DOCS = _PACKAGE_ROOT.parents[3] / "docs/isaac_ros_docs/manipulator_docs/training"
+_DOCUMENTATION_PATHS = tuple(
+    _TRAINING_DOCS / relative_path for relative_path in (
+        "index.rst",
+        "setup_training.md",
+        "tasks/displayport_insertion.rst",
+    ) if _TRAINING_DOCS.is_dir())
+_TRAIN_COMMAND_START = re.compile(
+    r"^(?:uv\s+run(?:\s+\S+)*?\s+isaaclab|(?:\./)?isaaclab\.sh)\s+train\b")
 _NUM_ENVS = re.compile(r"--num_envs(?:=|\s+)(\d+)\b")
 
 
@@ -71,7 +71,11 @@ def _rnn_model_from_cfg(
     """Instantiate an RSL-RL recurrent model from its Isaac Lab configuration."""
     kwargs = deepcopy(cfg.to_dict())
     assert kwargs.pop("class_name") == "RNNModel"
-    return RNNModel(obs=obs, obs_groups=obs_groups, obs_set=obs_set, output_dim=output_dim, **kwargs)
+    return RNNModel(obs=obs,
+                    obs_groups=obs_groups,
+                    obs_set=obs_set,
+                    output_dim=output_dim,
+                    **kwargs)
 
 
 def _documented_train_commands(path: Path) -> list[tuple[int, str]]:
@@ -107,7 +111,8 @@ def test_runner_uses_warning_free_rsl_rl_5_recurrent_models(capsys) -> None:
     assert cfg.actor.rnn_type == "lstm"
     assert cfg.actor.rnn_hidden_dim == 256
     assert cfg.actor.rnn_num_layers == 2
-    assert isinstance(cfg.actor.distribution_cfg, RslRlMLPModelCfg.HeteroscedasticGaussianDistributionCfg)
+    assert isinstance(cfg.actor.distribution_cfg,
+                      RslRlMLPModelCfg.HeteroscedasticGaussianDistributionCfg)
     assert cfg.actor.distribution_cfg.init_std == 1.0
     assert cfg.actor.distribution_cfg.std_type == "log"
 
@@ -155,9 +160,11 @@ def test_runner_migration_preserves_legacy_model_and_checkpoint_shapes() -> None
 
     for model_name, obs_set, output_dim in (("actor", "actor", 6), ("critic", "critic", 1)):
         torch.manual_seed(123)
-        explicit_model = _rnn_model_from_cfg(getattr(explicit_cfg, model_name), obs, obs_groups, obs_set, output_dim)
+        explicit_model = _rnn_model_from_cfg(getattr(explicit_cfg, model_name), obs, obs_groups,
+                                             obs_set, output_dim)
         torch.manual_seed(123)
-        legacy_model = _rnn_model_from_cfg(getattr(legacy_cfg, model_name), obs, obs_groups, obs_set, output_dim)
+        legacy_model = _rnn_model_from_cfg(getattr(legacy_cfg, model_name), obs, obs_groups,
+                                           obs_set, output_dim)
 
         explicit_state = explicit_model.state_dict()
         legacy_state = legacy_model.state_dict()
@@ -169,20 +176,22 @@ def test_runner_migration_preserves_legacy_model_and_checkpoint_shapes() -> None
 
 def test_documented_train_commands_have_enough_environments_for_minibatches() -> None:
     """Documented trainer commands must not create empty recurrent PPO minibatches."""
-    repository_root = Path(__file__).resolve().parents[1]
     num_mini_batches = Rizon4sGravDisplayportInsertionRNNPPORunnerCfg().algorithm.num_mini_batches
     commands_with_num_envs = 0
     offenders: list[str] = []
 
-    for relative_path in _DOCUMENTATION_PATHS:
-        for line_number, command in _documented_train_commands(repository_root / relative_path):
+    for path in _DOCUMENTATION_PATHS:
+        for line_number, command in _documented_train_commands(path):
             match = _NUM_ENVS.search(command)
             if match is None:
                 continue
             commands_with_num_envs += 1
             num_envs = int(match.group(1))
             if num_envs < num_mini_batches:
-                offenders.append(f"{relative_path}:{line_number} uses --num_envs {num_envs}: {command}")
+                offenders.append(
+                    f"{path}:{line_number} uses --num_envs {num_envs}: {command}")
 
     assert commands_with_num_envs > 0
-    assert offenders == [], "Documented recurrent PPO commands create empty minibatches:\n" + "\n".join(offenders)
+    assert offenders == [], (
+        "Documented recurrent PPO commands create empty minibatches:\n" + "\n".join(offenders)
+    )

@@ -1,8 +1,8 @@
-# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# Copyright (c) 2022-2026, The Isaac Lab Project Developers
+# (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-
 """Plan and validate DisplayPort training-optimization experiments.
 
 This module deliberately has no simulator imports. It provides deterministic,
@@ -13,16 +13,17 @@ work. Run it with ``python -m isaaclab_training.cli.displayport_training_validat
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import asdict
+from dataclasses import dataclass
+from enum import StrEnum
 import json
 import math
+from pathlib import Path
 import re
 import shlex
 import statistics
 import sys
-from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import asdict, dataclass
-from enum import StrEnum
-from pathlib import Path
 from typing import Any
 
 
@@ -68,7 +69,10 @@ class ExperimentSpec:
         """Return a collision-resistant run name encoding every matrix dimension."""
         curriculum = "cur" if self.curriculum_enabled else "nocur"
         iterations = f"_i{self.max_iterations}" if self.max_iterations is not None else ""
-        return f"dp_opt_{self.backend}_{self.profile.name}_{self.robot_asset}_{curriculum}{iterations}_seed{self.seed}"
+        return (
+            f"dp_opt_{self.backend}_{self.profile.name}_{self.robot_asset}_{curriculum}"
+            f"{iterations}_seed{self.seed}"
+        )
 
 
 @dataclass(frozen=True)
@@ -228,8 +232,8 @@ _CAPACITY_ERROR_PATTERN = re.compile(
     r"triangle[-_ ]pair[^\n]*(?:exceed|overflow|full)",
     re.IGNORECASE,
 )
-_ZERO_CAPACITY_PATTERN = re.compile(r"(?:overflow|dropped[- ]contact)[^\n]*[:=]\s*0(?:\.0+)?\b", re.IGNORECASE)
-
+_ZERO_CAPACITY_PATTERN = re.compile(r"(?:overflow|dropped[- ]contact)[^\n]*[:=]\s*0(?:\.0+)?\b",
+                                    re.IGNORECASE)
 
 VALIDATION_EVIDENCE_REQUIREMENTS = (
     MetricRequirement("scene.load_exit_code", exact=0.0),
@@ -244,15 +248,15 @@ VALIDATION_EVIDENCE_REQUIREMENTS = (
     MetricRequirement("seated_hold.seated_count", exact=8.0),
     MetricRequirement("seated_hold.max_drift_m", maximum=0.00025),
     MetricRequirement("seated_hold.max_overlap_m", maximum=0.00022),
-    MetricRequirement(
-        "scripted_insertion.candidate_seated_count", at_least_metric="scripted_insertion.baseline_seated_count"
-    ),
+    MetricRequirement("scripted_insertion.candidate_seated_count",
+                      at_least_metric="scripted_insertion.baseline_seated_count"),
     MetricRequirement("scripted_insertion.max_overlap_m", maximum=0.0003),
     MetricRequirement("scripted_insertion.max_seat_depth_delta_m", maximum=0.00025),
     MetricRequirement("scripted_insertion.max_jam_depth_delta_m", maximum=0.00025),
     MetricRequirement("scripted_insertion.tunneling_count", exact=0.0),
     MetricRequirement("scripted_insertion.contact_regression_count", exact=0.0),
-    MetricRequirement("offset_sweep.candidate_seated_count", at_least_metric="offset_sweep.baseline_seated_count"),
+    MetricRequirement("offset_sweep.candidate_seated_count",
+                      at_least_metric="offset_sweep.baseline_seated_count"),
     MetricRequirement("offset_sweep.max_overlap_m", maximum=0.0003),
     MetricRequirement("carry.lost_count", exact=0.0),
     MetricRequirement("carry.max_in_hand_drift_m", maximum=0.00025),
@@ -277,7 +281,10 @@ VALIDATION_EVIDENCE_REQUIREMENTS = (
 )
 
 
-def sample_count(num_envs: int, num_steps_per_env: int, iterations: int, world_size: int = 1) -> int:
+def sample_count(num_envs: int,
+                 num_steps_per_env: int,
+                 iterations: int,
+                 world_size: int = 1) -> int:
     """Return the number of environment samples represented by a schedule."""
     values = {
         "num_envs": num_envs,
@@ -339,11 +346,12 @@ def schedule_for_experiment(
         )
 
     return {
-        "curriculum_anneal_end_iteration": convert(reference.curriculum_anneal_end_iteration),
-        "save_interval": convert(reference.save_interval),
-        "max_iterations": (
-            spec.max_iterations if spec.max_iterations is not None else convert(reference.max_iterations(spec.backend))
-        ),
+        "curriculum_anneal_end_iteration":
+        convert(reference.curriculum_anneal_end_iteration),
+        "save_interval":
+        convert(reference.save_interval),
+        "max_iterations": (spec.max_iterations if spec.max_iterations is not None else convert(
+            reference.max_iterations(spec.backend))),
     }
 
 
@@ -369,10 +377,7 @@ def generate_experiment_matrix(
             world_size=world_size,
             seed=seed,
             max_iterations=max_iterations,
-        )
-        for backend in backends
-        for profile in profiles
-        for robot_asset in robot_assets
+        ) for backend in backends for profile in profiles for robot_asset in robot_assets
         for curriculum_enabled in curriculum_modes
     ]
 
@@ -399,23 +404,23 @@ def validate_experiment(
         positive_values.append(("max_iterations", spec.max_iterations))
     for name, value in positive_values:
         if value <= 0:
-            violations.append(ConstraintViolation("non_positive_value", f"{name} must be positive, got {value}"))
+            violations.append(
+                ConstraintViolation("non_positive_value", f"{name} must be positive, got {value}"))
 
     if spec.world_size != 1:
         violations.append(
             ConstraintViolation(
                 "distributed_command_not_supported",
-                "The generated command is single-GPU; submit distributed runs through a dedicated workflow.",
-            )
-        )
+                "The generated command is single-GPU; submit distributed runs through a "
+                "dedicated workflow.",
+            ))
 
     if profile.num_envs < profile.num_mini_batches:
         violations.append(
             ConstraintViolation(
                 "too_many_minibatches",
                 "Recurrent RSL-RL requires num_mini_batches no greater than num_envs.",
-            )
-        )
+            ))
 
     if profile.num_envs % profile.num_mini_batches:
         violations.append(
@@ -423,18 +428,17 @@ def validate_experiment(
                 "non_integral_minibatch",
                 f"{profile.num_envs} environments per rank are not divisible by "
                 f"{profile.num_mini_batches} recurrent minibatches.",
-            )
-        )
+            ))
 
     validated_limit = limits.for_backend(spec.backend)
     if profile.num_envs > validated_limit:
         violations.append(
             ConstraintViolation(
                 "environment_count_not_validated",
-                f"{profile.num_envs} environments/GPU exceeds the evidence-backed {spec.backend} limit "
+                f"{profile.num_envs} environments/GPU exceeds the evidence-backed "
+                f"{spec.backend} limit "
                 f"of {validated_limit}; run capacity and memory diagnostics before submission.",
-            )
-        )
+            ))
 
     if spec.robot_asset is RobotAsset.CALIBRATED:
         if calibrated_usd is None:
@@ -442,22 +446,19 @@ def validate_experiment(
                 ConstraintViolation(
                     "calibrated_usd_missing",
                     "A calibrated experiment requires --calibrated_usd.",
-                )
-            )
+                ))
         elif not calibrated_usd.is_absolute():
             violations.append(
                 ConstraintViolation(
                     "calibrated_usd_not_absolute",
                     f"The calibrated USD path must be absolute: {calibrated_usd}",
-                )
-            )
+                ))
         elif require_calibrated_usd_exists and not calibrated_usd.is_file():
             violations.append(
                 ConstraintViolation(
                     "calibrated_usd_not_found",
                     f"The calibrated USD does not exist: {calibrated_usd}",
-                )
-            )
+                ))
 
     return tuple(violations)
 
@@ -494,43 +495,36 @@ def training_command(
         "none",
     ]
     if spec.backend is Backend.NEWTON:
-        command.extend(
-            [
-                "physics=newton_sdf",
-                f"env.sim.physics.solver_cfg.iterations={profile.solver_iterations}",
-            ]
-        )
+        command.extend([
+            "physics=newton_sdf",
+            f"env.sim.physics.solver_cfg.iterations={profile.solver_iterations}",
+        ])
     else:
-        command.extend(
-            [
-                f"env.scene.dp_plug.spawn.rigid_props.solver_position_iteration_count={profile.solver_iterations}",
-                f"env.scene.dp_socket.spawn.rigid_props.solver_position_iteration_count={profile.solver_iterations}",
-            ]
-        )
+        command.extend([
+            f"env.scene.dp_plug.spawn.rigid_props."
+            f"solver_position_iteration_count={profile.solver_iterations}",
+            f"env.scene.dp_socket.spawn.rigid_props."
+            f"solver_position_iteration_count={profile.solver_iterations}",
+        ])
 
-    command.extend(
-        [
-            f"agent.num_steps_per_env={spec.num_steps_per_env}",
-            f"agent.save_interval={schedule['save_interval']}",
-            f"agent.algorithm.num_mini_batches={profile.num_mini_batches}",
-        ]
-    )
+    command.extend([
+        f"agent.num_steps_per_env={spec.num_steps_per_env}",
+        f"agent.save_interval={schedule['save_interval']}",
+        f"agent.algorithm.num_mini_batches={profile.num_mini_batches}",
+    ])
     if spec.curriculum_enabled:
-        command.extend(
-            [
-                "env.events.reset_plug_curriculum.params.at_goal_prob=0.8",
-                "env.events.reset_plug_curriculum.params.at_goal_prob_final=0.0",
-                f"env.events.reset_plug_curriculum.params.anneal_end_iter={schedule['curriculum_anneal_end_iteration']}",
-                f"env.events.reset_plug_curriculum.params.num_steps_per_env={spec.num_steps_per_env}",
-            ]
-        )
+        command.extend([
+            "env.events.reset_plug_curriculum.params.at_goal_prob=0.8",
+            "env.events.reset_plug_curriculum.params.at_goal_prob_final=0.0",
+            f"env.events.reset_plug_curriculum.params."
+            f"anneal_end_iter={schedule['curriculum_anneal_end_iteration']}",
+            f"env.events.reset_plug_curriculum.params.num_steps_per_env={spec.num_steps_per_env}",
+        ])
     else:
-        command.extend(
-            [
-                "env.events.reset_plug_curriculum.params.at_goal_prob=0.0",
-                "env.events.reset_plug_curriculum.params.at_goal_prob_final=0.0",
-            ]
-        )
+        command.extend([
+            "env.events.reset_plug_curriculum.params.at_goal_prob=0.0",
+            "env.events.reset_plug_curriculum.params.at_goal_prob_final=0.0",
+        ])
 
     if spec.robot_asset is RobotAsset.CALIBRATED:
         if calibrated_usd is None:
@@ -551,7 +545,8 @@ def extract_metric_series(text: str) -> dict[str, list[float]]:
             series["total_fps"].append(float(computation_fps_match.group(1)))
         for canonical_name, aliases in _METRIC_ALIASES.items():
             for alias in aliases:
-                label_pattern = re.escape(alias) if "/" in alias else rf"(?<![\w/]){re.escape(alias)}(?![\w/])"
+                label_pattern = re.escape(
+                    alias) if "/" in alias else rf"(?<![\w/]){re.escape(alias)}(?![\w/])"
                 match = re.search(
                     rf"{label_pattern}\s*[:=]\s*({_NUMBER_PATTERN})",
                     line,
@@ -563,7 +558,8 @@ def extract_metric_series(text: str) -> dict[str, list[float]]:
     return {name: values for name, values in series.items() if values}
 
 
-def summarize_metric_series(metrics: Mapping[str, Sequence[float]], tail_window: int = 20) -> dict[str, Any]:
+def summarize_metric_series(metrics: Mapping[str, Sequence[float]],
+                            tail_window: int = 20) -> dict[str, Any]:
     """Summarize finite metric series over their final window."""
     if tail_window <= 0:
         raise ValueError(f"tail_window must be positive, got {tail_window}")
@@ -591,11 +587,12 @@ def analyze_training_log(
     thresholds: TrainingHealthThresholds = TrainingHealthThresholds(),
     baseline_text: str | None = None,
 ) -> TrainingHealthReport:
-    """Check a training log for crashes, non-finite values, capacity errors, and scalar thresholds."""
+    """Check training logs for failures, capacity errors, and scalar thresholds."""
     if thresholds.tail_window <= 0:
         raise ValueError(f"tail_window must be positive, got {thresholds.tail_window}")
     if thresholds.minimum_iterations <= 0:
-        raise ValueError(f"minimum_iterations must be positive, got {thresholds.minimum_iterations}")
+        raise ValueError(
+            f"minimum_iterations must be positive, got {thresholds.minimum_iterations}")
     for name, value in (
         ("minimum_final_terminal_success", thresholds.minimum_final_terminal_success),
         ("minimum_tail_terminal_success", thresholds.minimum_tail_terminal_success),
@@ -631,28 +628,29 @@ def analyze_training_log(
         findings.append(
             HealthFinding(
                 "too_few_iterations",
-                f"Found {iteration_count} iteration records; require at least {thresholds.minimum_iterations}.",
-            )
-        )
+                f"Found {iteration_count} iteration records; require at least "
+                f"{thresholds.minimum_iterations}.",
+            ))
 
     terminal_success = metrics.get("terminal_success_rate", [])
     if thresholds.minimum_final_terminal_success is not None:
         if not terminal_success:
-            findings.append(HealthFinding("missing_terminal_success", "No terminal-success metric was found."))
+            findings.append(
+                HealthFinding("missing_terminal_success", "No terminal-success metric was found."))
         elif terminal_success[-1] < thresholds.minimum_final_terminal_success:
             findings.append(
                 HealthFinding(
                     "low_final_terminal_success",
                     f"Final terminal success {terminal_success[-1]:.6g} is below "
                     f"{thresholds.minimum_final_terminal_success:.6g}.",
-                )
-            )
+                ))
 
     if thresholds.minimum_tail_terminal_success is not None:
         if not terminal_success:
-            findings.append(HealthFinding("missing_terminal_success", "No terminal-success metric was found."))
+            findings.append(
+                HealthFinding("missing_terminal_success", "No terminal-success metric was found."))
         else:
-            tail = terminal_success[-thresholds.tail_window :]
+            tail = terminal_success[-thresholds.tail_window:]
             median = statistics.median(tail)
             if median < thresholds.minimum_tail_terminal_success:
                 findings.append(
@@ -660,43 +658,43 @@ def analyze_training_log(
                         "low_tail_terminal_success",
                         f"Tail terminal-success median {median:.6g} is below "
                         f"{thresholds.minimum_tail_terminal_success:.6g}.",
-                    )
-                )
+                    ))
 
     fps = metrics.get("total_fps", [])
     if thresholds.minimum_tail_median_fps is not None:
         if not fps:
             findings.append(HealthFinding("missing_fps", "No throughput metric was found."))
         else:
-            median_fps = statistics.median(fps[-thresholds.tail_window :])
+            median_fps = statistics.median(fps[-thresholds.tail_window:])
             if median_fps < thresholds.minimum_tail_median_fps:
                 findings.append(
                     HealthFinding(
                         "low_throughput",
-                        f"Tail FPS median {median_fps:.6g} is below {thresholds.minimum_tail_median_fps:.6g}.",
-                    )
-                )
+                        f"Tail FPS median {median_fps:.6g} is below "
+                        f"{thresholds.minimum_tail_median_fps:.6g}.",
+                    ))
 
     if thresholds.minimum_fps_ratio_to_baseline is not None:
         if baseline_text is None:
-            findings.append(HealthFinding("missing_baseline", "FPS-ratio validation requires a baseline log."))
+            findings.append(
+                HealthFinding("missing_baseline", "FPS-ratio validation requires a baseline log."))
         else:
             baseline_fps = extract_metric_series(baseline_text).get("total_fps", [])
             if not fps or not baseline_fps:
                 findings.append(
-                    HealthFinding("missing_fps", "Both candidate and baseline logs require throughput metrics.")
-                )
+                    HealthFinding("missing_fps",
+                                  "Both candidate and baseline logs require throughput metrics."))
             elif any(not math.isfinite(value) or value <= 0.0 for value in fps):
                 findings.append(
-                    HealthFinding("invalid_fps", "Candidate throughput metrics must be finite and positive.")
-                )
+                    HealthFinding("invalid_fps",
+                                  "Candidate throughput metrics must be finite and positive."))
             elif any(not math.isfinite(value) or value <= 0.0 for value in baseline_fps):
                 findings.append(
-                    HealthFinding("invalid_baseline_fps", "Baseline throughput metrics must be finite and positive.")
-                )
+                    HealthFinding("invalid_baseline_fps",
+                                  "Baseline throughput metrics must be finite and positive."))
             else:
-                candidate_median = statistics.median(fps[-thresholds.tail_window :])
-                baseline_median = statistics.median(baseline_fps[-thresholds.tail_window :])
+                candidate_median = statistics.median(fps[-thresholds.tail_window:])
+                baseline_median = statistics.median(baseline_fps[-thresholds.tail_window:])
                 ratio = candidate_median / baseline_median if baseline_median else 0.0
                 if ratio < thresholds.minimum_fps_ratio_to_baseline:
                     findings.append(
@@ -704,8 +702,7 @@ def analyze_training_log(
                             "fps_regression",
                             f"Candidate/baseline tail FPS ratio {ratio:.6g} is below "
                             f"{thresholds.minimum_fps_ratio_to_baseline:.6g}.",
-                        )
-                    )
+                        ))
 
     unique_findings = tuple(dict.fromkeys(findings))
     return TrainingHealthReport(
@@ -719,11 +716,9 @@ def analyze_training_log(
 def validation_evidence_template() -> dict[str, Any]:
     """Return an intentionally failing template for measurements from real GPU probes."""
     metric_names = {requirement.name for requirement in VALIDATION_EVIDENCE_REQUIREMENTS}
-    metric_names.update(
-        requirement.at_least_metric
-        for requirement in VALIDATION_EVIDENCE_REQUIREMENTS
-        if requirement.at_least_metric is not None
-    )
+    metric_names.update(requirement.at_least_metric
+                        for requirement in VALIDATION_EVIDENCE_REQUIREMENTS
+                        if requirement.at_least_metric is not None)
     return {
         "schema_version": 1,
         "metadata": {
@@ -737,22 +732,87 @@ def validation_evidence_template() -> dict[str, Any]:
             "baseline_command": None,
             "candidate_command": None,
         },
-        "metrics": {name: None for name in sorted(metric_names)},
-        "artifacts": {"logs": [], "videos": [], "tables": []},
+        "metrics": {
+            name: None
+            for name in sorted(metric_names)
+        },
+        "artifacts": {
+            "logs": [],
+            "videos": [],
+            "tables": []
+        },
     }
 
 
-def validate_evidence_document(document: object) -> tuple[ConstraintViolation, ...]:
-    """Validate measured GPU evidence against the release-gate contract."""
+def _validate_artifact_reference(
+    artifact_type: str,
+    reference: str,
+    artifact_root: Path,
+) -> ConstraintViolation | None:
+    """Validate one local artifact reference relative to ``artifact_root``."""
+    reference_path = Path(reference)
+    if reference_path.is_absolute() or "://" in reference:
+        return ConstraintViolation(
+            "artifact_path",
+            f"artifacts.{artifact_type} reference {reference!r} must be a relative local path.",
+        )
+
+    try:
+        candidate = (artifact_root / reference_path).resolve()
+        candidate.relative_to(artifact_root)
+    except (OSError, RuntimeError, ValueError):
+        return ConstraintViolation(
+            "artifact_path",
+            f"artifacts.{artifact_type} reference {reference!r} escapes the artifact root.",
+        )
+
+    if not candidate.exists():
+        return ConstraintViolation(
+            "artifact_missing",
+            f"artifacts.{artifact_type} reference {reference!r} does not exist.",
+        )
+    if not candidate.is_file():
+        return ConstraintViolation(
+            "artifact_not_file",
+            f"artifacts.{artifact_type} reference {reference!r} is not a regular file.",
+        )
+    try:
+        is_empty = candidate.stat().st_size == 0
+    except OSError as error:
+        return ConstraintViolation(
+            "artifact_unreadable",
+            f"artifacts.{artifact_type} reference {reference!r} cannot be inspected: {error}.",
+        )
+    if is_empty:
+        return ConstraintViolation(
+            "artifact_empty",
+            f"artifacts.{artifact_type} reference {reference!r} is empty.",
+        )
+    return None
+
+
+def validate_evidence_document(
+    document: object,
+    *,
+    artifact_root: Path | None = None,
+) -> tuple[ConstraintViolation, ...]:
+    """Validate measured GPU evidence against the release-gate contract.
+
+    When ``artifact_root`` is omitted, artifact references are checked as schema
+    values only. Supplying a root additionally requires every reference to name
+    a non-empty regular file contained beneath that directory.
+    """
     if not isinstance(document, Mapping):
-        return (ConstraintViolation("document_type", "Evidence document must be an object."),)
+        return (ConstraintViolation("document_type", "Evidence document must be an object."), )
 
     violations: list[ConstraintViolation] = []
     if isinstance(document.get("schema_version"), bool) or document.get("schema_version") != 1:
-        violations.append(ConstraintViolation("schema_version", "Evidence schema_version must be 1."))
+        violations.append(
+            ConstraintViolation("schema_version", "Evidence schema_version must be 1."))
     metadata = document.get("metadata")
     if not isinstance(metadata, Mapping):
-        violations.append(ConstraintViolation("metadata_missing", "Evidence metadata must be an object."))
+        violations.append(
+            ConstraintViolation("metadata_missing", "Evidence metadata must be an object."))
     else:
         string_fields = (
             "baseline_git_commit",
@@ -766,108 +826,119 @@ def validate_evidence_document(document: object) -> tuple[ConstraintViolation, .
         )
         for name in string_fields:
             if not isinstance(metadata.get(name), str) or not metadata[name]:
-                violations.append(ConstraintViolation("metadata_missing", f"metadata.{name} is required."))
+                violations.append(
+                    ConstraintViolation("metadata_missing", f"metadata.{name} is required."))
         for name in ("baseline_git_commit", "candidate_git_commit"):
             git_commit = metadata.get(name)
-            if not isinstance(git_commit, str) or re.fullmatch(r"[0-9a-fA-F]{40}", git_commit) is None:
-                violations.append(ConstraintViolation("metadata_value", f"metadata.{name} must be a 40-digit SHA."))
+            if not isinstance(git_commit, str) or re.fullmatch(r"[0-9a-fA-F]{40}",
+                                                               git_commit) is None:
+                violations.append(
+                    ConstraintViolation("metadata_value",
+                                        f"metadata.{name} must be a 40-digit SHA."))
         backend = metadata.get("backend")
         if not isinstance(backend, str) or backend not in tuple(item.value for item in Backend):
             violations.append(
-                ConstraintViolation("metadata_value", "metadata.backend must be either 'physx' or 'newton'.")
-            )
+                ConstraintViolation("metadata_value",
+                                    "metadata.backend must be either 'physx' or 'newton'."))
         if not isinstance(metadata.get("seed"), int) or isinstance(metadata.get("seed"), bool):
-            violations.append(ConstraintViolation("metadata_value", "metadata.seed must be an integer."))
+            violations.append(
+                ConstraintViolation("metadata_value", "metadata.seed must be an integer."))
 
+    resolved_artifact_root = artifact_root.resolve() if artifact_root is not None else None
     artifacts = document.get("artifacts")
     if not isinstance(artifacts, Mapping):
-        violations.append(ConstraintViolation("artifacts_missing", "Evidence artifacts must be an object."))
+        violations.append(
+            ConstraintViolation("artifacts_missing", "Evidence artifacts must be an object."))
     else:
         for artifact_type in ("logs", "videos", "tables"):
             entries = artifacts.get(artifact_type)
-            if (
-                not isinstance(entries, list)
-                or not entries
-                or any(not isinstance(entry, str) or not entry for entry in entries)
-            ):
+            if (not isinstance(entries, list) or not entries
+                    or any(not isinstance(entry, str) or not entry.strip() for entry in entries)):
                 violations.append(
                     ConstraintViolation(
                         "artifacts_missing",
-                        f"artifacts.{artifact_type} must contain at least one non-empty artifact reference.",
+                        f"artifacts.{artifact_type} must contain at least one non-empty "
+                        f"artifact reference.",
+                    ))
+                continue
+            if resolved_artifact_root is not None:
+                for entry in entries:
+                    violation = _validate_artifact_reference(
+                        artifact_type,
+                        entry,
+                        resolved_artifact_root,
                     )
-                )
+                    if violation is not None:
+                        violations.append(violation)
 
     metrics = document.get("metrics")
     if not isinstance(metrics, Mapping):
-        return (*violations, ConstraintViolation("metrics_missing", "Evidence metrics must be an object."))
+        return (*violations,
+                ConstraintViolation("metrics_missing", "Evidence metrics must be an object."))
 
     for requirement in VALIDATION_EVIDENCE_REQUIREMENTS:
         value = metrics.get(requirement.name)
         if value is None:
-            violations.append(ConstraintViolation("metric_missing", f"{requirement.name} is required."))
+            violations.append(
+                ConstraintViolation("metric_missing", f"{requirement.name} is required."))
             continue
         expects_boolean = isinstance(requirement.exact, bool)
         if expects_boolean and not isinstance(value, bool):
             violations.append(
-                ConstraintViolation("metric_type", f"{requirement.name} must be Boolean, got {type(value).__name__}.")
-            )
+                ConstraintViolation(
+                    "metric_type",
+                    f"{requirement.name} must be Boolean, got {type(value).__name__}."))
             continue
         if not expects_boolean and (isinstance(value, bool) or not isinstance(value, int | float)):
             violations.append(
-                ConstraintViolation("metric_type", f"{requirement.name} must be numeric, got {type(value).__name__}.")
-            )
+                ConstraintViolation(
+                    "metric_type",
+                    f"{requirement.name} must be numeric, got {type(value).__name__}."))
             continue
         if not expects_boolean and not math.isfinite(float(value)):
-            violations.append(ConstraintViolation("metric_non_finite", f"{requirement.name} must be finite."))
+            violations.append(
+                ConstraintViolation("metric_non_finite", f"{requirement.name} must be finite."))
             continue
         if not expects_boolean and float(value) < 0.0:
             violations.append(
-                ConstraintViolation("metric_minimum", f"{requirement.name} must be nonnegative, got {value!r}.")
-            )
+                ConstraintViolation("metric_minimum",
+                                    f"{requirement.name} must be nonnegative, got {value!r}."))
             continue
         if requirement.exact is not None and value != requirement.exact:
             violations.append(
                 ConstraintViolation(
                     "metric_exact",
                     f"{requirement.name}={value!r}, expected {requirement.exact!r}.",
-                )
-            )
+                ))
         if requirement.maximum is not None and float(value) > requirement.maximum:
             violations.append(
                 ConstraintViolation(
                     "metric_maximum",
                     f"{requirement.name}={float(value):.9g}, maximum {requirement.maximum:.9g}.",
-                )
-            )
+                ))
         if requirement.minimum is not None and float(value) < requirement.minimum:
             violations.append(
                 ConstraintViolation(
                     "metric_minimum",
                     f"{requirement.name}={float(value):.9g}, minimum {requirement.minimum:.9g}.",
-                )
-            )
+                ))
         if requirement.at_least_metric is not None:
             baseline = metrics.get(requirement.at_least_metric)
-            if (
-                isinstance(baseline, bool)
-                or not isinstance(baseline, int | float)
-                or not math.isfinite(float(baseline))
-                or float(baseline) < 0.0
-            ):
+            if (isinstance(baseline, bool) or not isinstance(baseline, int | float)
+                    or not math.isfinite(float(baseline)) or float(baseline) < 0.0):
                 violations.append(
                     ConstraintViolation(
                         "reference_metric_missing",
-                        f"{requirement.at_least_metric} is required to evaluate {requirement.name}.",
-                    )
-                )
+                        f"{requirement.at_least_metric} is required to evaluate "
+                        f"{requirement.name}.",
+                    ))
             elif float(value) < float(baseline):
                 violations.append(
                     ConstraintViolation(
                         "metric_regression",
                         f"{requirement.name}={float(value):.9g} is below "
                         f"{requirement.at_least_metric}={float(baseline):.9g}.",
-                    )
-                )
+                    ))
     return tuple(violations)
 
 
@@ -879,21 +950,32 @@ def _spec_to_dict(
 ) -> dict[str, Any]:
     schedule = schedule_for_experiment(spec)
     result = {
-        "name": spec.name,
-        "backend": spec.backend,
-        "profile": asdict(spec.profile),
-        "robot_asset": spec.robot_asset,
-        "curriculum_enabled": spec.curriculum_enabled,
-        "num_steps_per_env": spec.num_steps_per_env,
-        "world_size": spec.world_size,
-        "seed": spec.seed,
-        "schedule": schedule,
-        "rollout_samples": spec.profile.num_envs * spec.num_steps_per_env * spec.world_size,
-        "samples_per_minibatch": (
-            spec.profile.num_envs * spec.num_steps_per_env * spec.world_size // spec.profile.num_mini_batches
-        ),
-        "envs_per_recurrent_minibatch": spec.profile.num_envs // spec.profile.num_mini_batches,
-        "runnable": not violations,
+        "name":
+        spec.name,
+        "backend":
+        spec.backend,
+        "profile":
+        asdict(spec.profile),
+        "robot_asset":
+        spec.robot_asset,
+        "curriculum_enabled":
+        spec.curriculum_enabled,
+        "num_steps_per_env":
+        spec.num_steps_per_env,
+        "world_size":
+        spec.world_size,
+        "seed":
+        spec.seed,
+        "schedule":
+        schedule,
+        "rollout_samples":
+        spec.profile.num_envs * spec.num_steps_per_env * spec.world_size,
+        "samples_per_minibatch": (spec.profile.num_envs * spec.num_steps_per_env *
+                                  spec.world_size // spec.profile.num_mini_batches),
+        "envs_per_recurrent_minibatch":
+        spec.profile.num_envs // spec.profile.num_mini_batches,
+        "runnable":
+        not violations,
         "violations": [asdict(violation) for violation in violations],
     }
     if not violations:
@@ -916,11 +998,14 @@ def _positive_int(value: str) -> int:
 
 
 def _add_matrix_parser(subparsers: Any) -> None:
-    parser = subparsers.add_parser("matrix", help="Generate the controlled optimization experiment matrix.")
+    parser = subparsers.add_parser("matrix",
+                                   help="Generate the controlled optimization experiment matrix.")
     parser.add_argument("--backend", choices=("all", *Backend), default="all")
     parser.add_argument("--asset", choices=("both", *RobotAsset), default="both")
     parser.add_argument("--curriculum", choices=("both", "on", "off"), default="both")
-    parser.add_argument("--profile", action="append", choices=[profile.name for profile in _ALL_PROFILES])
+    parser.add_argument("--profile",
+                        action="append",
+                        choices=[profile.name for profile in _ALL_PROFILES])
     parser.add_argument("--calibrated_usd", type=Path)
     parser.add_argument("--max_iterations", type=_positive_int)
     parser.add_argument("--seed", type=int, default=123)
@@ -935,7 +1020,8 @@ def _add_matrix_parser(subparsers: Any) -> None:
 
 
 def _add_sample_budget_parser(subparsers: Any) -> None:
-    parser = subparsers.add_parser("sample_budget", help="Convert an iteration schedule at equal samples.")
+    parser = subparsers.add_parser("sample_budget",
+                                   help="Convert an iteration schedule at equal samples.")
     parser.add_argument("--reference_envs", type=_positive_int, required=True)
     parser.add_argument("--reference_steps", type=_positive_int, required=True)
     parser.add_argument("--reference_iterations", type=_positive_int, required=True)
@@ -960,21 +1046,22 @@ def _add_analyze_log_parser(subparsers: Any) -> None:
 def _run_matrix(args: argparse.Namespace) -> int:
     backends = _select_enum(args.backend, Backend)
     robot_assets = _select_enum(args.asset, RobotAsset)
-    curriculum_modes = (True, False) if args.curriculum == "both" else (args.curriculum == "on",)
+    curriculum_modes = (True, False) if args.curriculum == "both" else (args.curriculum == "on", )
     profiles_by_name = {profile.name: profile for profile in _ALL_PROFILES}
-    profiles = [profiles_by_name[name] for name in args.profile] if args.profile else list(EXPERIMENT_PROFILES)
+    profiles = [profiles_by_name[name]
+                for name in args.profile] if args.profile else list(EXPERIMENT_PROFILES)
     limits = ValidatedBackendLimits(
         physx_envs_per_gpu=args.validated_physx_envs_per_gpu,
         newton_envs_per_gpu=args.validated_newton_envs_per_gpu,
     )
     rows = []
     for spec in generate_experiment_matrix(
-        backends=backends,
-        profiles=profiles,
-        robot_assets=robot_assets,
-        curriculum_modes=curriculum_modes,
-        seed=args.seed,
-        max_iterations=args.max_iterations,
+            backends=backends,
+            profiles=profiles,
+            robot_assets=robot_assets,
+            curriculum_modes=curriculum_modes,
+            seed=args.seed,
+            max_iterations=args.max_iterations,
     ):
         violations = validate_experiment(
             spec,
@@ -997,11 +1084,9 @@ def _run_matrix(args: argparse.Namespace) -> int:
         print("name\trunnable\tanneal_end\tmax_iterations\tsamples/minibatch\treason")
         for row in rows:
             reason = "; ".join(item["code"] for item in row["violations"])
-            print(
-                f"{row['name']}\t{row['runnable']}\t"
-                f"{row['schedule']['curriculum_anneal_end_iteration']}\t"
-                f"{row['schedule']['max_iterations']}\t{row['samples_per_minibatch']}\t{reason}"
-            )
+            print(f"{row['name']}\t{row['runnable']}\t"
+                  f"{row['schedule']['curriculum_anneal_end_iteration']}\t"
+                  f"{row['schedule']['max_iterations']}\t{row['samples_per_minibatch']}\t{reason}")
     return 0 if all(row["runnable"] for row in rows) else 2
 
 
@@ -1016,14 +1101,17 @@ def _run_sample_budget(args: argparse.Namespace) -> int:
         candidate_world_size=args.candidate_world_size,
     )
     result = {
-        "candidate_iterations": iterations,
-        "reference_samples": sample_count(
+        "candidate_iterations":
+        iterations,
+        "reference_samples":
+        sample_count(
             args.reference_envs,
             args.reference_steps,
             args.reference_iterations,
             args.reference_world_size,
         ),
-        "candidate_samples": sample_count(
+        "candidate_samples":
+        sample_count(
             args.candidate_envs,
             args.candidate_steps,
             iterations,
@@ -1055,10 +1143,11 @@ def _run_analyze_log(args: argparse.Namespace) -> int:
 
 
 def _run_validate_evidence(args: argparse.Namespace) -> int:
-    document = json.loads(args.evidence.read_text(encoding="utf-8"))
-    violations = validate_evidence_document(document)
+    evidence_path = args.evidence.resolve()
+    document = json.loads(evidence_path.read_text(encoding="utf-8"))
+    violations = validate_evidence_document(document, artifact_root=evidence_path.parent)
     result = {
-        "source": str(args.evidence),
+        "source": str(evidence_path),
         "passed": not violations,
         "violations": [asdict(violation) for violation in violations],
     }
@@ -1073,7 +1162,8 @@ def _create_parser() -> argparse.ArgumentParser:
     _add_sample_budget_parser(subparsers)
     _add_analyze_log_parser(subparsers)
     subparsers.add_parser("evidence_template", help="Print the required real-GPU evidence schema.")
-    evidence_parser = subparsers.add_parser("validate_evidence", help="Validate measurements from real GPU probes.")
+    evidence_parser = subparsers.add_parser("validate_evidence",
+                                            help="Validate measurements from real GPU probes.")
     evidence_parser.add_argument("evidence", type=Path)
     return parser
 

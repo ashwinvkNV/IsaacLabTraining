@@ -1,8 +1,25 @@
-# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+# Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Copyright (c) 2022-2026, The Isaac Lab Project Developers
+# (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-
 """Task-space ROS inference configuration for DisplayPort insertion with the Flexiv Rizon 4S.
 
 Inherits from the task-space training config and adds the Isaac Manipulator metadata
@@ -13,13 +30,14 @@ import math
 
 from isaaclab.assets import RigidObjectCfg
 from isaaclab.utils.configclass import configclass
+from isaaclab_training.tasks.displayport_insertion.displayport_insertion_env_cfg import \
+    compute_plug_pose
+from isaaclab_training.tasks.displayport_insertion.displayport_insertion_env_cfg import \
+    compute_socket_root
 
-from isaaclab_training.tasks.displayport_insertion.displayport_insertion_env_cfg import (
-    compute_plug_pose,
-    compute_socket_root,
-)
-
-from .task_space_env_cfg import _ACTION_SCALE, _TCP_OFFSET, Rizon4sTaskSpaceDisplayportInsertionEnvCfg
+from .task_space_env_cfg import _ACTION_SCALE
+from .task_space_env_cfg import _TCP_OFFSET
+from .task_space_env_cfg import Rizon4sTaskSpaceDisplayportInsertionEnvCfg
 
 # Deployment socket/plug station pose. CALIBRATE: re-measure for the real DisplayPort
 # station (see ros_inference_env_cfg.py for the joint-space equivalent).
@@ -36,7 +54,8 @@ _HUBBLE_PLUG_ROOT, _HUBBLE_PLUG_ROT = compute_plug_pose(
 
 
 @configclass
-class Rizon4sTaskSpaceDisplayportInsertionROSInferenceEnvCfg(Rizon4sTaskSpaceDisplayportInsertionEnvCfg):
+class Rizon4sTaskSpaceDisplayportInsertionROSInferenceEnvCfg(
+        Rizon4sTaskSpaceDisplayportInsertionEnvCfg):
     """Task-space ROS / Isaac Manipulator inference config.
 
     Exposes the observation/action metadata Isaac Manipulator needs for on-robot

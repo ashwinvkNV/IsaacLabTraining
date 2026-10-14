@@ -1,25 +1,19 @@
-# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# Copyright (c) 2022-2026, The Isaac Lab Project Developers
+# (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-
 """ROS inference metadata for the Newton DisplayPort OSC policy."""
 
 import math
 
 from isaaclab.assets import RigidObjectCfg
 from isaaclab.utils.configclass import configclass
-
 from isaaclab_training.tasks.displayport_insertion.displayport_insertion_env_cfg import (
-    compute_plug_pose,
-    compute_socket_root,
-)
+    compute_plug_pose, compute_socket_root)
 
-from .task_space_newton_env_cfg import (
-    _OSC_ORIENTATION_SCALE,
-    _OSC_POSITION_SCALE,
-    Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg,
-)
+from .task_space_newton_env_cfg import (_OSC_ORIENTATION_SCALE, _OSC_POSITION_SCALE,
+                                        Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg)
 
 _DEPLOY_GEOMETRY_POS = (0.475, 0.125, 0.06)
 _DEPLOY_SOCKET_ROT = (0.5, 0.5, 0.5, -0.5)
@@ -34,7 +28,8 @@ _DEPLOY_PLUG_ROOT, _DEPLOY_PLUG_ROT = compute_plug_pose(
 
 
 @configclass
-class Rizon4sTaskSpaceNewtonDisplayportInsertionROSInferenceEnvCfg(Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg):
+class Rizon4sTaskSpaceNewtonDisplayportInsertionROSInferenceEnvCfg(
+        Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg):
     """Newton OSC training configuration with its ROS and LEAPP contract."""
 
     def __post_init__(self) -> None:
@@ -52,7 +47,9 @@ class Rizon4sTaskSpaceNewtonDisplayportInsertionROSInferenceEnvCfg(Rizon4sTaskSp
         self.task_space_action_reference = "robot_root"
         self.task_space_action_body_name = "flange"
         self.task_space_action_body_offset = [0.0, 0.0, 0.0]
-        self.arm_joint_names = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7"]
+        self.arm_joint_names = [
+            "joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7"
+        ]
         self.action_space = 6
         self.observation_space = 18
         self.action_scale = [*_OSC_POSITION_SCALE, *([_OSC_ORIENTATION_SCALE] * 3)]
@@ -84,7 +81,9 @@ class Rizon4sTaskSpaceNewtonDisplayportInsertionROSInferenceEnvCfg(Rizon4sTaskSp
         pose_range = self.events.randomize_socket_pose.params["pose_range"]
         self.fixed_asset_init_pos_range = [pose_range[axis][1] for axis in ("x", "y", "z")]
         self.fixed_asset_init_orn_deg = [0.0, 0.0, 0.0]
-        self.fixed_asset_init_orn_deg_range = [math.degrees(pose_range[axis][1]) for axis in ("roll", "pitch", "yaw")]
+        self.fixed_asset_init_orn_deg_range = [
+            math.degrees(pose_range[axis][1]) for axis in ("roll", "pitch", "yaw")
+        ]
 
         socket_pos_noise = self.observations.policy.socket_pos.noise.noise_cfg.n_max
         self.fixed_asset_pos_obs_noise_level = [socket_pos_noise] * 3

@@ -1,19 +1,36 @@
-# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+# Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Copyright (c) 2022-2026, The Isaac Lab Project Developers
+# (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-
 """Export RSL-RL policies with LEAPP using packaged Isaac Lab APIs."""
 
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 import contextlib
 import importlib.metadata as metadata
 import os
 import random
 import sys
-from collections.abc import Mapping
 from typing import Any
 
 from isaaclab_training.export.contracts import get_export_contract
@@ -25,11 +42,11 @@ def parse_export_args(argv: list[str] | None = None) -> tuple[argparse.Namespace
     """Parse export arguments and return remaining Hydra overrides."""
     from isaaclab.app import AppLauncher
     from isaaclab_tasks.utils import setup_preset_cli
-
     # Preset argument discovery queries Gym's registry, including for ``--help``.
     import isaaclab_training.tasks  # noqa: F401
 
-    parser = argparse.ArgumentParser(description="Export an Isaac Lab policy with RSL-RL and LEAPP.")
+    parser = argparse.ArgumentParser(
+        description="Export an Isaac Lab policy with RSL-RL and LEAPP.")
     parser.add_argument("--task", type=str, default=None, help="Name of the registered task.")
     parser.add_argument(
         "--agent",
@@ -41,9 +58,15 @@ def parse_export_args(argv: list[str] | None = None) -> tuple[argparse.Namespace
         "--checkpoint",
         type=str,
         default=None,
-        help="Checkpoint path, checkpoint directory, 'pretrained', or omitted for automatic local discovery.",
+        help=(
+            "Checkpoint path, checkpoint directory, 'pretrained', "
+            "or omitted for automatic local discovery."
+        ),
     )
-    parser.add_argument("--export_task_name", type=str, default=None, help="Name of the exported graph.")
+    parser.add_argument("--export_task_name",
+                        type=str,
+                        default=None,
+                        help="Name of the exported graph.")
     parser.add_argument(
         "--export_method",
         type=str,
@@ -51,8 +74,14 @@ def parse_export_args(argv: list[str] | None = None) -> tuple[argparse.Namespace
         choices=["onnx-dynamo", "onnx-torchscript", "jit-script", "jit-trace", "pt2"],
         help="Export backend. Defaults to onnx-dynamo.",
     )
-    parser.add_argument("--export_save_path", type=str, default=None, help="Directory for exported artifacts.")
-    parser.add_argument("--validation_steps", type=int, default=5, help="Number of export validation steps.")
+    parser.add_argument("--export_save_path",
+                        type=str,
+                        default=None,
+                        help="Directory for exported artifacts.")
+    parser.add_argument("--validation_steps",
+                        type=int,
+                        default=5,
+                        help="Number of export validation steps.")
     parser.add_argument("--disable_graph_visualization", action="store_true", default=False)
     parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment.")
     parser.add_argument(
@@ -71,10 +100,16 @@ def parse_export_args(argv: list[str] | None = None) -> tuple[argparse.Namespace
         "--task_space_contract",
         action="store_true",
         default=False,
-        help=("Compatibility shortcut for '--contract displayport_task_space'. Prefer --contract for new tasks."),
+        help=(
+            "Compatibility shortcut for '--contract displayport_task_space'. Prefer --contract "
+            "for new tasks."
+         ),
     )
     AppLauncher.add_app_launcher_args(parser)
-    parser.add_argument("--limit_cpu_threads", type=int, default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    parser.add_argument("--limit_cpu_threads",
+                        type=int,
+                        default=argparse.SUPPRESS,
+                        help=argparse.SUPPRESS)
 
     args_cli, hydra_args = setup_preset_cli(parser, argv)
     args_cli.headless = True
@@ -107,7 +142,8 @@ def get_actor_memory_module(policy):
 
 def is_actor_recurrent_policy(policy) -> bool:
     """Return whether the actor policy has a supported recurrent state container."""
-    return bool(getattr(policy, "is_recurrent", False) and get_actor_memory_module(policy) is not None)
+    return bool(
+        getattr(policy, "is_recurrent", False) and get_actor_memory_module(policy) is not None)
 
 
 def get_actor_hidden_state(policy):
@@ -137,8 +173,13 @@ def ensure_actor_hidden_state_initialized(policy, batch_size: int, device, dtype
     if memory is None or not hasattr(memory, "rnn"):
         return None
 
-    zeros = torch.zeros(memory.rnn.num_layers, batch_size, memory.rnn.hidden_size, device=device, dtype=dtype)
-    actor_state = (zeros.clone(), zeros.clone()) if isinstance(memory.rnn, torch.nn.LSTM) else zeros
+    zeros = torch.zeros(memory.rnn.num_layers,
+                        batch_size,
+                        memory.rnn.hidden_size,
+                        device=device,
+                        dtype=dtype)
+    actor_state = (zeros.clone(),
+                   zeros.clone()) if isinstance(memory.rnn, torch.nn.LSTM) else zeros
     set_actor_hidden_state(policy, actor_state)
     return actor_state
 
@@ -157,7 +198,7 @@ def actor_hidden_from_registered(registered_state, original_hidden):
     if isinstance(original_hidden, tuple):
         if isinstance(registered_state, tuple):
             return registered_state
-        return (registered_state,)
+        return (registered_state, )
     return registered_state
 
 
@@ -177,27 +218,25 @@ def _update_agent_cfg_from_export_args(agent_cfg, args_cli: argparse.Namespace):
 def export_rsl_rl_agent(args_cli: argparse.Namespace, env_cfg, agent_cfg) -> bool:
     """Export an RSL-RL agent with an optional task-specific I/O contract."""
     import gymnasium as gym
-    import leapp
-    import torch
     from isaaclab.envs import ManagerBasedRLEnv
     from isaaclab.utils.assets import retrieve_file_path
     from isaaclab.utils.leapp import patch_env_for_export
     from isaaclab.utils.leapp.utils import ensure_env_spec_id
-    from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper, handle_deprecated_rsl_rl_cfg
-    from isaaclab_rl.utils.pretrained_checkpoint import (
-        get_pretrained_checkpoint_backend_names,
-        get_published_pretrained_checkpoint,
-    )
+    from isaaclab_rl.rsl_rl import handle_deprecated_rsl_rl_cfg, RslRlVecEnvWrapper
+    from isaaclab_rl.utils.pretrained_checkpoint import (get_pretrained_checkpoint_backend_names,
+                                                         get_published_pretrained_checkpoint)
     from isaaclab_tasks.utils import get_checkpoint_path
+    import leapp
     from packaging import version
     from rsl_rl.runners import DistillationRunner, OnPolicyRunner
+    import torch
 
     installed_version = metadata.version("rsl-rl-lib")
     if version.parse(installed_version) < version.parse(RSL_RL_MIN_VERSION):
         print(
-            f"[WARNING] LEAPP RSL-RL export is validated with rsl-rl-lib {RSL_RL_MIN_VERSION} or newer. "
-            f"Installed version is '{installed_version}'."
-        )
+            f"[WARNING] LEAPP RSL-RL export is validated with rsl-rl-lib {RSL_RL_MIN_VERSION} "
+            f"or newer. "
+            f"Installed version is '{installed_version}'.")
 
     task_name = args_cli.task.split(":")[-1]
     checkpoint_task_name = task_name.replace("-Play", "")
@@ -212,21 +251,26 @@ def export_rsl_rl_agent(args_cli: argparse.Namespace, env_cfg, agent_cfg) -> boo
     print(f"[INFO] Loading checkpoint search path from directory: {log_root_path}")
     if args_cli.checkpoint == "pretrained":
         backend_names = get_pretrained_checkpoint_backend_names(env_cfg)
-        resume_path = get_published_pretrained_checkpoint("rsl_rl", checkpoint_task_name, *backend_names)
+        resume_path = get_published_pretrained_checkpoint("rsl_rl", checkpoint_task_name,
+                                                          *backend_names)
         if not resume_path:
             print("[INFO] No pre-trained checkpoint is currently available for this task.")
             return False
     elif args_cli.checkpoint and os.path.isdir(args_cli.checkpoint):
-        resume_path = get_checkpoint_path(
-            os.path.dirname(args_cli.checkpoint), os.path.basename(args_cli.checkpoint), agent_cfg.load_checkpoint
-        )
+        resume_path = get_checkpoint_path(os.path.dirname(args_cli.checkpoint),
+                                          os.path.basename(args_cli.checkpoint),
+                                          agent_cfg.load_checkpoint)
     elif args_cli.checkpoint:
         resume_path = retrieve_file_path(args_cli.checkpoint)
     else:
-        resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
+        resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run,
+                                          agent_cfg.load_checkpoint)
 
     if not resume_path:
-        print(f"[INFO] No checkpoint found for task: {checkpoint_task_name} in directory: {log_root_path}")
+        print(
+            f"[INFO] No checkpoint found for task: {checkpoint_task_name} in directory: "
+            f"{log_root_path}"
+        )
         return False
 
     log_dir = os.path.dirname(resume_path)
@@ -238,7 +282,10 @@ def export_rsl_rl_agent(args_cli: argparse.Namespace, env_cfg, agent_cfg) -> boo
         contract = get_export_contract(args_cli.contract)
         env = gym.make(args_cli.task, cfg=env_cfg, render_mode=None)
         policy_node_name = ensure_env_spec_id(env)
-        graph_name = args_cli.export_task_name if args_cli.export_task_name is not None else task_name
+        graph_name = (
+            args_cli.export_task_name
+            if args_cli.export_task_name is not None else task_name
+        )
         if contract is not None and args_cli.export_task_name is None:
             graph_name = contract.graph_name
         if contract is not None:
@@ -253,7 +300,9 @@ def export_rsl_rl_agent(args_cli: argparse.Namespace, env_cfg, agent_cfg) -> boo
             else:
                 required_obs_groups = {"policy"}
             if contract is None or not contract.skip_automatic_env_patch:
-                patch_env_for_export(env, export_method=export_method, required_obs_groups=required_obs_groups)
+                patch_env_for_export(env,
+                                     export_method=export_method,
+                                     required_obs_groups=required_obs_groups)
         elif args_cli.export_method is not None:
             raise ValueError("--export_method is only supported for manager-based environments.")
 
@@ -261,9 +310,15 @@ def export_rsl_rl_agent(args_cli: argparse.Namespace, env_cfg, agent_cfg) -> boo
 
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
         if agent_cfg.class_name == "OnPolicyRunner":
-            runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
+            runner = OnPolicyRunner(env,
+                                    agent_cfg.to_dict(),
+                                    log_dir=None,
+                                    device=agent_cfg.device)
         elif agent_cfg.class_name == "DistillationRunner":
-            runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
+            runner = DistillationRunner(env,
+                                        agent_cfg.to_dict(),
+                                        log_dir=None,
+                                        device=agent_cfg.device)
         else:
             raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
         runner.load(resume_path)
@@ -276,7 +331,9 @@ def export_rsl_rl_agent(args_cli: argparse.Namespace, env_cfg, agent_cfg) -> boo
         else:
             save_path = log_dir
 
-        leapp.start(graph_name, save_path=save_path, max_cached_io=max(args_cli.validation_steps, 2))
+        leapp.start(graph_name,
+                    save_path=save_path,
+                    max_cached_io=max(args_cli.validation_steps, 2))
         leapp_started = True
         obs = env.reset()[0]
 
@@ -300,15 +357,16 @@ def export_rsl_rl_agent(args_cli: argparse.Namespace, env_cfg, agent_cfg) -> boo
                         dtype=next(policy.parameters()).dtype,
                     )
                     registered_state = leapp.annotate.state_tensors(
-                        policy_node_name, state_dict_from_actor_hidden(actor_hidden)
-                    )
-                    set_actor_hidden_state(policy, actor_hidden_from_registered(registered_state, actor_hidden))
+                        policy_node_name, state_dict_from_actor_hidden(actor_hidden))
+                    set_actor_hidden_state(
+                        policy, actor_hidden_from_registered(registered_state, actor_hidden))
 
                 actions = policy(obs_for_policy)
 
                 if is_actor_recurrent_policy(policy):
                     actor_hidden_after = get_actor_hidden_state(policy)
-                    leapp.annotate.update_state(policy_node_name, state_dict_from_actor_hidden(actor_hidden_after))
+                    leapp.annotate.update_state(policy_node_name,
+                                                state_dict_from_actor_hidden(actor_hidden_after))
 
                 if contract is not None:
                     contract.export_action(
@@ -347,7 +405,6 @@ def run_export_with_hydra(args_cli: argparse.Namespace, hydra_args: list[str]) -
 
     from isaaclab.app import launch_simulation
     from isaaclab_tasks.utils.hydra import hydra_task_config
-
     import isaaclab_training.tasks  # noqa: F401
 
     original_argv = sys.argv

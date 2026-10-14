@@ -1,7 +1,19 @@
-# Copyright (c) 2025-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
-# All rights reserved.
+# SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+# Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
-# SPDX-License-Identifier: BSD-3-Clause
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
 
 """Noise models specific to deployment tasks."""
 
@@ -18,11 +30,10 @@ from collections.abc import Sequence
 from dataclasses import MISSING
 from typing import TYPE_CHECKING
 
-import torch
-
 from isaaclab.utils.configclass import configclass
 from isaaclab.utils.math import quat_from_euler_xyz, quat_mul
 from isaaclab.utils.noise import ConstantNoiseCfg, NoiseModel, NoiseModelCfg
+import torch
 
 if TYPE_CHECKING:
     from isaaclab.utils.noise import NoiseCfg
@@ -31,13 +42,15 @@ if TYPE_CHECKING:
 class ResetSampledConstantNoiseModel(NoiseModel):
     """Noise model that samples noise ONLY during reset and applies it consistently.
 
-    The noise is sampled from the configured distribution ONLY during reset and applied consistently
+    The noise is sampled from the configured distribution ONLY during reset and applied
+    consistently
     until the next reset. Unlike regular noise that generates new random values every step,
     this model maintains the same noise values throughout an episode.
 
     Note:
         This noise model was used since the noise randimization should only be done at reset time.
-        Other noise models(Eg: GaussianNoise) were not used since this randomizes the noise at every time-step.
+        Other noise models(Eg: GaussianNoise) were not used since this randomizes the noise at
+        every time-step.
     """
 
     def __init__(self, noise_model_cfg: NoiseModelCfg, num_envs: int, device: str):
@@ -51,7 +64,8 @@ class ResetSampledConstantNoiseModel(NoiseModel):
     def reset(self, env_ids: Sequence[int] | None = None):
         """Reset the noise model by sampling NEW noise values.
 
-        This method samples new noise for the specified environments using the configured noise function.
+        This method samples new noise for the specified environments using the configured noise
+        function.
         The sampled noise will remain constant until the next reset.
 
         Args:
@@ -65,11 +79,12 @@ class ResetSampledConstantNoiseModel(NoiseModel):
         # Use the existing noise function to sample new noise
         # Create dummy data to sample from the noise function
         dummy_data = torch.zeros(
-            (env_ids.stop - env_ids.start if isinstance(env_ids, slice) else len(env_ids), 1), device=self._device
-        )
+            (env_ids.stop - env_ids.start if isinstance(env_ids, slice) else len(env_ids), 1),
+            device=self._device)
 
         # Sample noise using the configured noise function
-        sampled_noise = self._noise_model_cfg.noise_cfg.func(dummy_data, self._noise_model_cfg.noise_cfg)
+        sampled_noise = self._noise_model_cfg.noise_cfg.func(dummy_data,
+                                                             self._noise_model_cfg.noise_cfg)
 
         self._sampled_noise[env_ids] = sampled_noise
 

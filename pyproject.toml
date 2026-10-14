@@ -6,8 +6,8 @@ build-backend = "uv_build"
 name = "isaaclab-training"
 version = "0.1.0"
 description = "Generic Isaac Lab downstream training tasks and export tools"
-readme = "README.md"
-license = { file = "LICENSE" }
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "isaaclab",
@@ -107,5 +107,5 @@ ignore = [
 "src/isaaclab_training/tasks/displayport_insertion/**/*.py" = ["B006", "B007", "E402", "E501", "I001", "SIM118"]
 
 [tool.codespell]
-skip = "./docs/_build/*,*.usd,*.usda,*.usdc,*.json,*.onnx,*.pt,*.mp4,*.data,uv.lock,logs"
+skip = "*.usd,*.usda,*.usdc,*.json,*.onnx,*.pt,*.mp4,*.data,uv.lock,logs"
 ignore-words-list = "leapp,nd"

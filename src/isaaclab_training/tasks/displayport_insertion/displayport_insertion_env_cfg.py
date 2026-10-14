@@ -1,7 +1,19 @@
-# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
-# All rights reserved.
+# SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+# Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
-# SPDX-License-Identifier: BSD-3-Clause
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
 
 """Base RL environment for inserting a DisplayPort plug into a socket.
 
@@ -10,16 +22,9 @@ Targets the DisplayPort plug/socket assets published under
 plain :class:`~isaaclab.sim.UsdFileCfg` at ``scale=(1,1,1)``.
 """
 
-import os
 from dataclasses import MISSING
+import os
 
-import torch
-from isaaclab_physx.physics import PhysxCfg
-from isaaclab_physx.sim.schemas import PhysxCollisionPropertiesCfg, PhysxRigidBodyPropertiesCfg
-from isaaclab_physx.sim.spawners.materials import PhysxRigidBodyMaterialCfg
-
-import isaaclab.sim as sim_utils
-import isaaclab.utils.math as math_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.managers import ActionTermCfg as ActionTerm
@@ -30,19 +35,22 @@ from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
+import isaaclab.sim as sim_utils
 from isaaclab.sim.simulation_cfg import SimulationCfg
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.utils.configclass import configclass
+import isaaclab.utils.math as math_utils
 from isaaclab.utils.noise import UniformNoiseCfg
-from isaaclab_visualizers.kit import KitVisualizerCfg
-
+from isaaclab_physx.physics import PhysxCfg
 import isaaclab_training.mdp as mdp
 from isaaclab_training.mdp.noise_models import ResetSampledConstantNoiseModelCfg
+from isaaclab_training.utils.spawners_cfg import UsdFileWithMassOverrideCfg
+import torch
 
 # Resolve task assets from the production root selected by the installed Isaac Sim version.
 _DISPLAY_ASSETS_DEFAULT_DIR = f"{ISAAC_NUCLEUS_DIR}/Props/Factory/display_port_cable_assets"
-DISPLAY_ASSETS_DIR = os.environ.get("ISAACLAB_TRAINING_DISPLAY_ASSETS_DIR", _DISPLAY_ASSETS_DEFAULT_DIR).rstrip("/")
-
+DISPLAY_ASSETS_DIR = os.environ.get("ISAACLAB_TRAINING_DISPLAY_ASSETS_DIR",
+                                    _DISPLAY_ASSETS_DEFAULT_DIR).rstrip("/")
 
 # The asset offsets below are plain Python tuples evaluated at import time, while
 # :mod:`isaaclab.utils.math` operates on tensors. These two adapters only convert between the
@@ -121,63 +129,6 @@ _PLUG_ROOT_POS, _DEFAULT_PLUG_ROT = compute_plug_pose(
 # Asset Configurations
 ##
 
-
-@configclass
-class DisplayPortPlug(RigidObjectCfg):
-    """DisplayPort right-angle plug (held asset) — dynamic."""
-
-    prim_path = "{ENV_REGEX_NS}/DisplayPortPlug"
-    spawn = sim_utils.UsdFileCfg(
-        usd_path=f"{DISPLAY_ASSETS_DIR}/displayport_plug.usd",
-        scale=(1.0, 1.0, 1.0),
-        activate_contact_sensors=True,
-        rigid_props=PhysxRigidBodyPropertiesCfg(
-            disable_gravity=False,
-            kinematic_enabled=False,
-            max_depenetration_velocity=0.5,
-            linear_damping=0.0,
-            angular_damping=0.0,
-            max_linear_velocity=1000.0,
-            max_angular_velocity=3666.0,
-            enable_gyroscopic_forces=True,
-            solver_position_iteration_count=128,
-            solver_velocity_iteration_count=1,
-            max_contact_impulse=None,
-        ),
-        mass_props=sim_utils.MassPropertiesCfg(mass=0.03),
-        collision_props=PhysxCollisionPropertiesCfg(contact_offset=0.00001, rest_offset=-0.00005),
-    )
-    init_state = RigidObjectCfg.InitialStateCfg(pos=_PLUG_ROOT_POS, rot=_DEFAULT_PLUG_ROT)
-
-
-@configclass
-class DisplayPortSocket(RigidObjectCfg):
-    """DisplayPort socket (fixed asset) — kinematic."""
-
-    prim_path = "{ENV_REGEX_NS}/DisplayPortSocket"
-    spawn = sim_utils.UsdFileCfg(
-        usd_path=f"{DISPLAY_ASSETS_DIR}/displayport_socket_no_protrusions.usd",
-        scale=(1.0, 1.0, 1.0),
-        activate_contact_sensors=False,
-        rigid_props=PhysxRigidBodyPropertiesCfg(
-            disable_gravity=False,
-            kinematic_enabled=True,
-            max_depenetration_velocity=5.0,
-            linear_damping=0.0,
-            angular_damping=0.0,
-            max_linear_velocity=1000.0,
-            max_angular_velocity=3666.0,
-            enable_gyroscopic_forces=True,
-            solver_position_iteration_count=128,
-            solver_velocity_iteration_count=1,
-            max_contact_impulse=1e32,
-        ),
-        mass_props=sim_utils.MassPropertiesCfg(mass=None),
-        collision_props=PhysxCollisionPropertiesCfg(contact_offset=0.0001, rest_offset=-0.0001),
-    )
-    init_state = RigidObjectCfg.InitialStateCfg(pos=_SOCKET_ROOT_POS, rot=_DEFAULT_SOCKET_ROT)
-
-
 ##
 # Environment configuration
 ##
@@ -195,8 +146,59 @@ class DisplayportInsertionSceneCfg(InteractiveSceneCfg):
         init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, -1.05)),
     )
 
-    dp_plug = DisplayPortPlug()
-    dp_socket = DisplayPortSocket()
+    # DisplayPort right-angle plug (held asset) - dynamic.
+    dp_plug = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/DisplayPortPlug",
+        spawn=UsdFileWithMassOverrideCfg(
+            usd_path=f"{DISPLAY_ASSETS_DIR}/displayport_plug.usd",
+            scale=(1.0, 1.0, 1.0),
+            activate_contact_sensors=True,
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                disable_gravity=False,
+                kinematic_enabled=False,
+                max_depenetration_velocity=0.5,
+                linear_damping=0.0,
+                angular_damping=0.0,
+                max_linear_velocity=1000.0,
+                max_angular_velocity=3666.0,
+                enable_gyroscopic_forces=True,
+                solver_position_iteration_count=128,
+                solver_velocity_iteration_count=1,
+                max_contact_impulse=None,
+            ),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.03),
+            collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.00001,
+                                                             rest_offset=-0.00005),
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=_PLUG_ROOT_POS, rot=_DEFAULT_PLUG_ROT),
+    )
+
+    # DisplayPort socket (fixed asset) - kinematic.
+    dp_socket = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/DisplayPortSocket",
+        spawn=UsdFileWithMassOverrideCfg(
+            usd_path=f"{DISPLAY_ASSETS_DIR}/displayport_socket_no_protrusions.usd",
+            scale=(1.0, 1.0, 1.0),
+            activate_contact_sensors=False,
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                disable_gravity=False,
+                kinematic_enabled=True,
+                max_depenetration_velocity=5.0,
+                linear_damping=0.0,
+                angular_damping=0.0,
+                max_linear_velocity=1000.0,
+                max_angular_velocity=3666.0,
+                enable_gyroscopic_forces=True,
+                solver_position_iteration_count=128,
+                solver_velocity_iteration_count=1,
+                max_contact_impulse=1e32,
+            ),
+            mass_props=sim_utils.MassPropertiesCfg(mass=None),
+            collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.0001,
+                                                             rest_offset=-0.0001),
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=_SOCKET_ROOT_POS, rot=_DEFAULT_SOCKET_ROT),
+    )
 
     robot: ArticulationCfg = MISSING
 
@@ -222,14 +224,18 @@ class ObservationsCfg:
     class PolicyCfg(ObsGroup):
         """Observations for policy group."""
 
-        joint_pos = ObsTerm(func=mdp.joint_pos, params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*"])})
-        joint_vel = ObsTerm(func=mdp.joint_vel, params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*"])})
+        joint_pos = ObsTerm(func=mdp.joint_pos,
+                            params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*"])})
+        joint_vel = ObsTerm(func=mdp.joint_vel,
+                            params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*"])})
         socket_pos = ObsTerm(
             func=mdp.rigid_object_pos_w,
-            params={"asset_cfg": SceneEntityCfg("dp_socket"), "offset": SOCKET_INSERTION_OFFSET},
+            params={
+                "asset_cfg": SceneEntityCfg("dp_socket"),
+                "offset": SOCKET_INSERTION_OFFSET
+            },
             noise=ResetSampledConstantNoiseModelCfg(
-                noise_cfg=UniformNoiseCfg(n_min=-0.01, n_max=0.01, operation="add")
-            ),
+                noise_cfg=UniformNoiseCfg(n_min=-0.01, n_max=0.01, operation="add")),
         )
         socket_quat = ObsTerm(
             func=mdp.rigid_object_quat_w,
@@ -244,11 +250,16 @@ class ObservationsCfg:
     class CriticCfg(ObsGroup):
         """Observations for critic group."""
 
-        joint_pos = ObsTerm(func=mdp.joint_pos, params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*"])})
-        joint_vel = ObsTerm(func=mdp.joint_vel, params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*"])})
+        joint_pos = ObsTerm(func=mdp.joint_pos,
+                            params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*"])})
+        joint_vel = ObsTerm(func=mdp.joint_vel,
+                            params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*"])})
         socket_pos = ObsTerm(
             func=mdp.rigid_object_pos_w,
-            params={"asset_cfg": SceneEntityCfg("dp_socket"), "offset": SOCKET_INSERTION_OFFSET},
+            params={
+                "asset_cfg": SceneEntityCfg("dp_socket"),
+                "offset": SOCKET_INSERTION_OFFSET
+            },
         )
         socket_quat = ObsTerm(
             func=mdp.rigid_object_quat_w,
@@ -256,7 +267,10 @@ class ObservationsCfg:
         )
         plug_pos = ObsTerm(
             func=mdp.rigid_object_pos_w,
-            params={"asset_cfg": SceneEntityCfg("dp_plug"), "offset": PLUG_INSERTION_OFFSET},
+            params={
+                "asset_cfg": SceneEntityCfg("dp_plug"),
+                "offset": PLUG_INSERTION_OFFSET
+            },
         )
         plug_quat = ObsTerm(
             func=mdp.rigid_object_quat_w,
@@ -320,7 +334,8 @@ class TerminationsCfg:
 class DisplayportInsertionEnvCfg(ManagerBasedRLEnvCfg):
     """Base configuration for DisplayPort plug/socket insertion."""
 
-    scene: DisplayportInsertionSceneCfg = DisplayportInsertionSceneCfg(num_envs=4096, env_spacing=2.5)
+    scene: DisplayportInsertionSceneCfg = DisplayportInsertionSceneCfg(num_envs=4096,
+                                                                       env_spacing=2.5)
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
     rewards: RewardsCfg = RewardsCfg()
@@ -336,8 +351,25 @@ class DisplayportInsertionEnvCfg(ManagerBasedRLEnvCfg):
     success_socket_offset: list = MISSING
     success_plug_offset: list = MISSING
     success_plug_goal_rot_inv: list = MISSING
+
+    # PhysX collision stack per 1024 envs [bytes] and its floor; applied at env creation so it
+    # follows
+    # ``--num_envs`` (PhysX needed up to ~115 MiB per 1024 envs; it allocates ~3.6x the nominal
+    # size).
+    # Set to None to keep ``sim.physics.gpu_collision_stack_size`` as configured.
+    physx_collision_stack_bytes_per_1024_envs: int | None = 2**28
+    physx_collision_stack_min_bytes: int = 2**27
+    # Contact-patch buffer per env, also applied at env creation (floor:
+    # ``sim.physics.gpu_max_rigid_patch_count``).
+    # PhysX needed ~15 patches per env under heavy contact (overflowed 163840 at 12288 envs).
+    physx_rigid_patches_per_env: int | None = 32
+    # Rigid-contact buffer per env, applied at env creation as the next power of two (floor:
+    # ``sim.physics.gpu_max_rigid_contact_count``). A learning policy needed ~113 contacts per env
+    # (1.39M at 12288 envs, which overflowed the fixed 2**20 and dropped contacts).
+    physx_rigid_contacts_per_env: int | None = 160
+
     sim: SimulationCfg = SimulationCfg(
-        physics_material=PhysxRigidBodyMaterialCfg(
+        physics_material=sim_utils.RigidBodyMaterialCfg(
             friction_combine_mode="multiply",
             restitution_combine_mode="multiply",
             static_friction=1.0,
@@ -348,19 +380,22 @@ class DisplayportInsertionEnvCfg(ManagerBasedRLEnvCfg):
             bounce_threshold_velocity=0.2,
             friction_offset_threshold=0.01,
             friction_correlation_distance=0.00625,
-            gpu_collision_stack_size=2**30,
-            gpu_max_rigid_contact_count=2**23,
-            gpu_max_rigid_patch_count=2**23,
+            # Buffers sized to measured need (no PhysX overflow at 1024 and 4096 envs under heavy
+            # contact). The collision stack is scaled with num_envs at env creation, see
+            # ``physx_collision_stack_bytes_per_1024_envs``. Old values: stack 2**30, contacts and
+            # patches 2**23, lost aggregate pairs 2**25 (~5.3 GiB more GPU memory at 1024 envs).
+            gpu_collision_stack_size=2**28,
+            gpu_max_rigid_contact_count=2**20,
+            gpu_max_rigid_patch_count=5 * 2**15,
+            gpu_found_lost_aggregate_pairs_capacity=2**20,
         ),
     )
 
     def __post_init__(self):
         """Post initialization."""
         self.episode_length_s = 6.66
-        self.sim.default_visualizer_cfg = KitVisualizerCfg(
-            eye=(0.5, -1.8, 1.2),
-            lookat=(0.5, 0.0, 0.5),
-        )
+        self.viewer.eye = (0.5, -1.8, 1.2)
+        self.viewer.lookat = (0.5, 0.0, 0.5)
         self.decimation = 8
         self.sim.render_interval = self.decimation
         self.sim.dt = 1.0 / 240.0

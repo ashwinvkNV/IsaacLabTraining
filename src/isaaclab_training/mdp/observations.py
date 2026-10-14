@@ -1,19 +1,35 @@
-# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+# Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Copyright (c) 2022-2026, The Isaac Lab Project Developers
+# (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-
 """Class-based observation terms for manipulation deployment environments."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import torch
-import warp as wp
-
 from isaaclab.managers import ManagerTermBase, ObservationTermCfg, SceneEntityCfg
 from isaaclab.utils.math import combine_frame_transforms, matrix_from_quat
+import torch
+import warp as wp
 
 if TYPE_CHECKING:
     from isaaclab.assets import Articulation, RigidObject
@@ -25,14 +41,19 @@ if TYPE_CHECKING:
 class gear_shaft_pos_w(ManagerTermBase):
     """Gear shaft position in world frame with offset applied.
 
-    This class-based term caches gear offset tensors and identity quaternions for efficient computation
-    across all environments. It transforms the gear base position by the appropriate offset based on the
+    This class-based term caches gear offset tensors and identity quaternions for efficient
+    computation
+    across all environments. It transforms the gear base position by the appropriate offset based
+    on the
     active gear type in each environment.
 
     Args:
-        asset_cfg: The asset configuration for the gear base. Defaults to SceneEntityCfg("factory_gear_base").
-        gear_offsets: A dictionary mapping gear type names to their shaft offsets in the gear base frame.
-            Required keys are "gear_small", "gear_medium", and "gear_large", each mapping to a 3D offset
+        asset_cfg: The asset configuration for the gear base. Defaults to
+        SceneEntityCfg("factory_gear_base").
+        gear_offsets: A dictionary mapping gear type names to their shaft offsets in the gear base
+        frame.
+            Required keys are "gear_small", "gear_medium", and "gear_large", each mapping to a 3D
+            offset
             list [x, y, z]. This parameter is required and must be provided in the configuration.
 
     Returns:
@@ -55,32 +76,33 @@ class gear_shaft_pos_w(ManagerTermBase):
         super().__init__(cfg, env)
 
         # Cache asset
-        self.asset_cfg: SceneEntityCfg = cfg.params.get("asset_cfg", SceneEntityCfg("factory_gear_base"))
+        self.asset_cfg: SceneEntityCfg = cfg.params.get("asset_cfg",
+                                                        SceneEntityCfg("factory_gear_base"))
         self.asset: RigidObject = env.scene[self.asset_cfg.name]
 
         # Pre-cache gear offset tensors (required parameter)
         if "gear_offsets" not in cfg.params:
             raise ValueError(
                 "'gear_offsets' parameter is required in gear_shaft_pos_w configuration. "
-                "It should be a dict with keys 'gear_small', 'gear_medium', 'gear_large' mapping to [x, y, z] offsets."
+                "It should be a dict with keys 'gear_small', 'gear_medium', 'gear_large' "
+                "mapping to [x, y, z] offsets."
             )
         gear_offsets = cfg.params["gear_offsets"]
         if not isinstance(gear_offsets, dict):
             raise TypeError(
                 f"'gear_offsets' parameter must be a dict, got {type(gear_offsets).__name__}. "
-                "It should have keys 'gear_small', 'gear_medium', 'gear_large' mapping to [x, y, z] offsets."
+                "It should have keys 'gear_small', 'gear_medium', 'gear_large' mapping to [x, y,"
+                " z] offsets."
             )
 
         self.gear_offset_tensors = {}
         for gear_type in ["gear_small", "gear_medium", "gear_large"]:
             if gear_type not in gear_offsets:
-                raise ValueError(
-                    f"'{gear_type}' offset is required in 'gear_offsets' parameter. "
-                    f"Found keys: {list(gear_offsets.keys())}"
-                )
-            self.gear_offset_tensors[gear_type] = torch.tensor(
-                gear_offsets[gear_type], device=env.device, dtype=torch.float32
-            )
+                raise ValueError(f"'{gear_type}' offset is required in 'gear_offsets' parameter. "
+                                 f"Found keys: {list(gear_offsets.keys())}")
+            self.gear_offset_tensors[gear_type] = torch.tensor(gear_offsets[gear_type],
+                                                               device=env.device,
+                                                               dtype=torch.float32)
 
         # Stack offset tensors for vectorized indexing (shape: 3, 3)
         # Index 0=small, 1=medium, 2=large
@@ -96,11 +118,10 @@ class gear_shaft_pos_w(ManagerTermBase):
         # Pre-allocate buffers
         self.offsets_buffer = torch.zeros(env.num_envs, 3, device=env.device, dtype=torch.float32)
         self.env_indices = torch.arange(env.num_envs, device=env.device)
-        self.identity_quat = (
-            torch.tensor([[0.0, 0.0, 0.0, 1.0]], device=env.device, dtype=torch.float32)
-            .repeat(env.num_envs, 1)
-            .contiguous()
-        )
+        self.identity_quat = (torch.tensor([[0.0, 0.0, 0.0, 1.0]],
+                                           device=env.device,
+                                           dtype=torch.float32).repeat(env.num_envs,
+                                                                       1).contiguous())
 
     def __call__(
         self,
@@ -135,7 +156,8 @@ class gear_shaft_pos_w(ManagerTermBase):
         self.offsets_buffer = self.gear_offsets_stacked[gear_type_indices]
 
         # Transform offsets
-        shaft_pos, _ = combine_frame_transforms(base_pos, base_quat, self.offsets_buffer, self.identity_quat)
+        shaft_pos, _ = combine_frame_transforms(base_pos, base_quat, self.offsets_buffer,
+                                                self.identity_quat)
 
         return shaft_pos - env.scene.env_origins
 
@@ -143,12 +165,14 @@ class gear_shaft_pos_w(ManagerTermBase):
 class gear_shaft_quat_w(ManagerTermBase):
     """Gear shaft orientation in world frame.
 
-    This class-based term returns the orientation of the gear base (which is the same as the gear shaft
+    This class-based term returns the orientation of the gear base (which is the same as the gear
+    shaft
     orientation). The quaternion is canonicalized to ensure the w component is positive, reducing
     observation variation for the policy.
 
     Args:
-        asset_cfg: The asset configuration for the gear base. Defaults to SceneEntityCfg("factory_gear_base").
+        asset_cfg: The asset configuration for the gear base. Defaults to
+        SceneEntityCfg("factory_gear_base").
 
     Returns:
         Gear shaft orientation tensor as a quaternion (w, x, y, z) with shape (num_envs, 4).
@@ -164,13 +188,14 @@ class gear_shaft_quat_w(ManagerTermBase):
         super().__init__(cfg, env)
 
         # Cache asset
-        self.asset_cfg: SceneEntityCfg = cfg.params.get("asset_cfg", SceneEntityCfg("factory_gear_base"))
+        self.asset_cfg: SceneEntityCfg = cfg.params.get("asset_cfg",
+                                                        SceneEntityCfg("factory_gear_base"))
         self.asset: RigidObject = env.scene[self.asset_cfg.name]
 
     def __call__(
-        self,
-        env: ManagerBasedRLEnv,
-        asset_cfg: SceneEntityCfg = SceneEntityCfg("factory_gear_base"),
+            self,
+            env: ManagerBasedRLEnv,
+            asset_cfg: SceneEntityCfg = SceneEntityCfg("factory_gear_base"),
     ) -> torch.Tensor:
         """Compute gear shaft orientation in world frame.
 
@@ -362,7 +387,8 @@ class rigid_object_pos_w(ManagerTermBase):
         super().__init__(cfg, env)
 
         if "asset_cfg" not in cfg.params:
-            raise ValueError("'asset_cfg' parameter is required in rigid_object_pos_w configuration.")
+            raise ValueError(
+                "'asset_cfg' parameter is required in rigid_object_pos_w configuration.")
         self.asset_cfg: SceneEntityCfg = cfg.params["asset_cfg"]
         self.asset: RigidObject = env.scene[self.asset_cfg.name]
 
@@ -371,11 +397,10 @@ class rigid_object_pos_w(ManagerTermBase):
         self._has_offset = any(float(value) != 0.0 for value in offset)
         self._offset_batch = self.offset_tensor.unsqueeze(0).expand(env.num_envs, -1)
 
-        self.identity_quat = (
-            torch.tensor([[0.0, 0.0, 0.0, 1.0]], device=env.device, dtype=torch.float32)
-            .repeat(env.num_envs, 1)
-            .contiguous()
-        )
+        self.identity_quat = (torch.tensor([[0.0, 0.0, 0.0, 1.0]],
+                                           device=env.device,
+                                           dtype=torch.float32).repeat(env.num_envs,
+                                                                       1).contiguous())
 
     def __call__(
         self,
@@ -387,7 +412,8 @@ class rigid_object_pos_w(ManagerTermBase):
         obj_quat = wp.to_torch(self.asset.data.root_quat_w)
 
         if self._has_offset:
-            obj_pos, _ = combine_frame_transforms(obj_pos, obj_quat, self._offset_batch, self.identity_quat)
+            obj_pos, _ = combine_frame_transforms(obj_pos, obj_quat, self._offset_batch,
+                                                  self.identity_quat)
 
         return obj_pos - env.scene.env_origins
 
@@ -411,7 +437,8 @@ class rigid_object_quat_w(ManagerTermBase):
         super().__init__(cfg, env)
 
         if "asset_cfg" not in cfg.params:
-            raise ValueError("'asset_cfg' parameter is required in rigid_object_quat_w configuration.")
+            raise ValueError(
+                "'asset_cfg' parameter is required in rigid_object_quat_w configuration.")
         self.asset_cfg: SceneEntityCfg = cfg.params["asset_cfg"]
         self.asset: RigidObject = env.scene[self.asset_cfg.name]
 
@@ -443,7 +470,7 @@ def _quat_to_rot_6d(quat: torch.Tensor) -> torch.Tensor:
     """
     rot_mat = matrix_from_quat(quat)
     batch_shape = rot_mat.shape[:-2]
-    return rot_mat[..., :2, :].clone().reshape(batch_shape + (6,))
+    return rot_mat[..., :2, :].clone().reshape(batch_shape + (6, ))
 
 
 class rigid_object_rot_6d_w(ManagerTermBase):
@@ -463,7 +490,8 @@ class rigid_object_rot_6d_w(ManagerTermBase):
     def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedRLEnv):
         super().__init__(cfg, env)
         if "asset_cfg" not in cfg.params:
-            raise ValueError("'asset_cfg' parameter is required in rigid_object_rot_6d_w configuration.")
+            raise ValueError(
+                "'asset_cfg' parameter is required in rigid_object_rot_6d_w configuration.")
         self.asset_cfg: SceneEntityCfg = cfg.params["asset_cfg"]
         self.asset: RigidObject = env.scene[self.asset_cfg.name]
 
@@ -510,11 +538,10 @@ class eef_pos_w(ManagerTermBase):
         self.offset_tensor = torch.tensor(offset, device=env.device, dtype=torch.float32)
         self._has_offset = any(float(value) != 0.0 for value in offset)
         self._offset_batch = self.offset_tensor.unsqueeze(0).expand(env.num_envs, -1)
-        self.identity_quat = (
-            torch.tensor([[0.0, 0.0, 0.0, 1.0]], device=env.device, dtype=torch.float32)
-            .repeat(env.num_envs, 1)
-            .contiguous()
-        )
+        self.identity_quat = (torch.tensor([[0.0, 0.0, 0.0, 1.0]],
+                                           device=env.device,
+                                           dtype=torch.float32).repeat(env.num_envs,
+                                                                       1).contiguous())
 
     def __call__(
         self,
@@ -527,7 +554,8 @@ class eef_pos_w(ManagerTermBase):
 
         if self._has_offset:
             body_quat = wp.to_torch(self.robot.data.body_quat_w)[:, self.body_idx, :]
-            body_pos, _ = combine_frame_transforms(body_pos, body_quat, self._offset_batch, self.identity_quat)
+            body_pos, _ = combine_frame_transforms(body_pos, body_quat, self._offset_batch,
+                                                   self.identity_quat)
 
         return body_pos - env.scene.env_origins
 

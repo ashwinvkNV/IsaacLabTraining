@@ -1,7 +1,19 @@
-# Copyright (c) 2025-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
-# All rights reserved.
+# SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+# Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
-# SPDX-License-Identifier: BSD-3-Clause
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
 
 """Class-based reward terms for the gear assembly manipulation environment."""
 
@@ -9,10 +21,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import torch
-
 from isaaclab.managers import ManagerTermBase, RewardTermCfg, SceneEntityCfg
 from isaaclab.utils.math import combine_frame_transforms, quat_apply, quat_mul
+import torch
 
 if TYPE_CHECKING:
     from isaaclab.assets import Articulation
@@ -162,14 +173,14 @@ class keypoint_command_error_exp(ManagerTermBase):
         if kp_use_sum_of_exps:
             for coeff in kp_exp_coeffs:
                 a, b = coeff
-                keypoint_reward_exp += (
-                    1.0 / (torch.exp(a * keypoint_dist_sep) + b + torch.exp(-a * keypoint_dist_sep))
-                ).mean(-1)
+                keypoint_reward_exp += (1.0 / (torch.exp(a * keypoint_dist_sep) + b +
+                                               torch.exp(-a * keypoint_dist_sep))).mean(-1)
         else:
             keypoint_dist = keypoint_dist_sep.mean(-1)
             for coeff in kp_exp_coeffs:
                 a, b = coeff
-                keypoint_reward_exp += 1.0 / (torch.exp(a * keypoint_dist) + b + torch.exp(-a * keypoint_dist))
+                keypoint_reward_exp += 1.0 / (torch.exp(a * keypoint_dist) + b +
+                                              torch.exp(-a * keypoint_dist))
 
         return keypoint_reward_exp
 
@@ -190,7 +201,8 @@ class keypoint_entity_error(ManagerTermBase):
         super().__init__(cfg, env)
 
         # Cache asset configuration
-        self.asset_cfg_1: SceneEntityCfg = cfg.params.get("asset_cfg_1", SceneEntityCfg("factory_gear_base"))
+        self.asset_cfg_1: SceneEntityCfg = cfg.params.get("asset_cfg_1",
+                                                          SceneEntityCfg("factory_gear_base"))
         self.asset_1 = env.scene[self.asset_cfg_1.name]
 
         self._init_gear_selection(env)
@@ -210,7 +222,8 @@ class keypoint_entity_error(ManagerTermBase):
             "gear_large": env.scene["factory_gear_large"],
         }
 
-    def _get_selected_gear_poses(self, env: ManagerBasedRLEnv) -> tuple[torch.Tensor, torch.Tensor]:
+    def _get_selected_gear_poses(self,
+                                 env: ManagerBasedRLEnv) -> tuple[torch.Tensor, torch.Tensor]:
         """Retrieve world-frame position and quaternion of the active gear per environment.
 
         Returns:
@@ -218,9 +231,9 @@ class keypoint_entity_error(ManagerTermBase):
         """
         if not hasattr(env, "_gear_type_manager"):
             raise RuntimeError(
-                "Gear type manager not initialized. Ensure randomize_gear_type event is configured "
-                "in your environment's event configuration before this reward term is used."
-            )
+                "Gear type manager not initialized. Ensure randomize_gear_type event is "
+                "configured "
+                "in your environment's event configuration before this reward term is used.")
 
         gear_type_manager: randomize_gear_type = env._gear_type_manager
         self.gear_type_indices = gear_type_manager.get_all_gear_type_indices()
@@ -336,20 +349,21 @@ class keypoint_entity_error_exp(keypoint_entity_error):
         if kp_use_sum_of_exps:
             for coeff in kp_exp_coeffs:
                 a, b = coeff
-                keypoint_reward_exp += (
-                    1.0 / (torch.exp(a * keypoint_dist_sep) + b + torch.exp(-a * keypoint_dist_sep))
-                ).mean(-1)
+                keypoint_reward_exp += (1.0 / (torch.exp(a * keypoint_dist_sep) + b +
+                                               torch.exp(-a * keypoint_dist_sep))).mean(-1)
         else:
             keypoint_dist = keypoint_dist_sep.mean(-1)
             for coeff in kp_exp_coeffs:
                 a, b = coeff
-                keypoint_reward_exp += 1.0 / (torch.exp(a * keypoint_dist) + b + torch.exp(-a * keypoint_dist))
+                keypoint_reward_exp += 1.0 / (torch.exp(a * keypoint_dist) + b +
+                                              torch.exp(-a * keypoint_dist))
 
         return keypoint_reward_exp
 
 
 class keypoint_ee_grasp_error(keypoint_entity_error):
-    """Compute keypoint distance between the robot end effector and the gear's grasp-corrected pose.
+    """Compute keypoint distance between the robot end effector and the gear's grasp-corrected
+    pose.
 
     Transforms the gear's actual world pose into the expected EE position/orientation
     using grasp offsets, so that the distance is ~0 when properly holding the gear
@@ -370,21 +384,26 @@ class keypoint_ee_grasp_error(keypoint_entity_error):
         self._init_gear_selection(env)
         self.keypoint_computer = _compute_keypoint_distance(cfg, env)
 
-        self.robot_asset_cfg: SceneEntityCfg = cfg.params.get("robot_asset_cfg", SceneEntityCfg("robot"))
+        self.robot_asset_cfg: SceneEntityCfg = cfg.params.get("robot_asset_cfg",
+                                                              SceneEntityCfg("robot"))
         self.robot_asset: Articulation = env.scene[self.robot_asset_cfg.name]
 
         self.end_effector_body_name: str = cfg.params["end_effector_body_name"]
         grasp_rot_offset = cfg.params["grasp_rot_offset"]
-        self.grasp_rot_offset_tensor = (
-            torch.tensor(grasp_rot_offset, device=env.device, dtype=torch.float32).unsqueeze(0).repeat(env.num_envs, 1)
-        )
+        self.grasp_rot_offset_tensor = (torch.tensor(grasp_rot_offset,
+                                                     device=env.device,
+                                                     dtype=torch.float32).unsqueeze(0).repeat(
+                                                         env.num_envs, 1))
 
         gear_offsets_grasp = cfg.params["gear_offsets_grasp"]
         self.gear_grasp_offsets_stacked = torch.stack(
             [
-                torch.tensor(gear_offsets_grasp["gear_small"], device=env.device, dtype=torch.float32),
-                torch.tensor(gear_offsets_grasp["gear_medium"], device=env.device, dtype=torch.float32),
-                torch.tensor(gear_offsets_grasp["gear_large"], device=env.device, dtype=torch.float32),
+                torch.tensor(
+                    gear_offsets_grasp["gear_small"], device=env.device, dtype=torch.float32),
+                torch.tensor(
+                    gear_offsets_grasp["gear_medium"], device=env.device, dtype=torch.float32),
+                torch.tensor(
+                    gear_offsets_grasp["gear_large"], device=env.device, dtype=torch.float32),
             ],
             dim=0,
         )
@@ -478,7 +497,8 @@ class keypoint_ee_grasp_error(keypoint_entity_error):
 
 
 class keypoint_ee_grasp_error_exp(keypoint_ee_grasp_error):
-    """Compute exponential keypoint reward between the robot end effector and the gear's grasp-corrected pose.
+    """Compute exponential keypoint reward between the robot end effector and the gear's
+    grasp-corrected pose.
 
     Transforms the gear's actual world pose into the expected EE position/orientation
     using grasp offsets, so that the reward is high (~1) when properly holding the gear
@@ -529,14 +549,14 @@ class keypoint_ee_grasp_error_exp(keypoint_ee_grasp_error):
         if kp_use_sum_of_exps:
             for coeff in kp_exp_coeffs:
                 a, b = coeff
-                keypoint_reward_exp += (
-                    1.0 / (torch.exp(a * keypoint_dist_sep) + b + torch.exp(-a * keypoint_dist_sep))
-                ).mean(-1)
+                keypoint_reward_exp += (1.0 / (torch.exp(a * keypoint_dist_sep) + b +
+                                               torch.exp(-a * keypoint_dist_sep))).mean(-1)
         else:
             kp_dist_mean = keypoint_dist_sep.mean(-1)
             for coeff in kp_exp_coeffs:
                 a, b = coeff
-                keypoint_reward_exp += 1.0 / (torch.exp(a * kp_dist_mean) + b + torch.exp(-a * kp_dist_mean))
+                keypoint_reward_exp += 1.0 / (torch.exp(a * kp_dist_mean) + b +
+                                              torch.exp(-a * kp_dist_mean))
 
         weight_scale = self._get_weight_scale(env)
         scaled_reward = keypoint_reward_exp * weight_scale * is_active
@@ -605,17 +625,19 @@ class keypoint_two_body_error(ManagerTermBase):
         self.offset_2 = torch.tensor(offset_2, device=env.device, dtype=torch.float32)
 
         rot_offset_2 = cfg.params.get("rot_offset_2", [0.0, 0.0, 0.0, 1.0])
-        self.rot_offset_2 = (
-            torch.tensor(rot_offset_2, device=env.device, dtype=torch.float32).unsqueeze(0).repeat(env.num_envs, 1)
-        )
+        self.rot_offset_2 = (torch.tensor(rot_offset_2, device=env.device,
+                                          dtype=torch.float32).unsqueeze(0).repeat(
+                                              env.num_envs, 1))
 
-        self.identity_quat = torch.tensor([[0.0, 0.0, 0.0, 1.0]], device=env.device, dtype=torch.float32).repeat(
-            env.num_envs, 1
-        )
+        self.identity_quat = torch.tensor([[0.0, 0.0, 0.0, 1.0]],
+                                          device=env.device,
+                                          dtype=torch.float32).repeat(env.num_envs, 1)
 
         self.keypoint_computer = _compute_keypoint_distance(cfg, env)
 
-    def _get_kp_frames(self, env: ManagerBasedRLEnv) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _get_kp_frames(
+            self, env: ManagerBasedRLEnv
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Compute keypoint frames for both assets with offsets applied."""
         import warp as wp
 
@@ -625,10 +647,12 @@ class keypoint_two_body_error(ManagerTermBase):
         quat_2 = wp.to_torch(self.asset_2.data.root_quat_w)
 
         offset_1_batch = self.offset_1.unsqueeze(0).expand(env.num_envs, -1)
-        kp_pos_1, kp_quat_1 = combine_frame_transforms(pos_1, quat_1, offset_1_batch, self.identity_quat)
+        kp_pos_1, kp_quat_1 = combine_frame_transforms(pos_1, quat_1, offset_1_batch,
+                                                       self.identity_quat)
 
         offset_2_batch = self.offset_2.unsqueeze(0).expand(env.num_envs, -1)
-        kp_pos_2, kp_quat_2 = combine_frame_transforms(pos_2, quat_2, offset_2_batch, self.rot_offset_2)
+        kp_pos_2, kp_quat_2 = combine_frame_transforms(pos_2, quat_2, offset_2_batch,
+                                                       self.rot_offset_2)
 
         return kp_pos_1, kp_quat_1, kp_pos_2, kp_quat_2
 
@@ -689,14 +713,14 @@ class keypoint_two_body_error_exp(keypoint_two_body_error):
         if kp_use_sum_of_exps:
             for coeff in kp_exp_coeffs:
                 a, b = coeff
-                keypoint_reward_exp += (
-                    1.0 / (torch.exp(a * keypoint_dist_sep) + b + torch.exp(-a * keypoint_dist_sep))
-                ).mean(-1)
+                keypoint_reward_exp += (1.0 / (torch.exp(a * keypoint_dist_sep) + b +
+                                               torch.exp(-a * keypoint_dist_sep))).mean(-1)
         else:
             keypoint_dist = keypoint_dist_sep.mean(-1)
             for coeff in kp_exp_coeffs:
                 a, b = coeff
-                keypoint_reward_exp += 1.0 / (torch.exp(a * keypoint_dist) + b + torch.exp(-a * keypoint_dist))
+                keypoint_reward_exp += 1.0 / (torch.exp(a * keypoint_dist) + b +
+                                              torch.exp(-a * keypoint_dist))
 
         return keypoint_reward_exp
 
@@ -706,7 +730,8 @@ class keypoint_two_body_error_exp(keypoint_two_body_error):
 ##
 
 
-def _get_keypoint_offsets_full_6d(add_cube_center_kp: bool = False, device: torch.device | None = None) -> torch.Tensor:
+def _get_keypoint_offsets_full_6d(add_cube_center_kp: bool = False,
+                                  device: torch.device | None = None) -> torch.Tensor:
     """Get keypoints for pose alignment comparison. Pose is aligned if all axis are aligned.
 
     Args:
@@ -795,10 +820,14 @@ class _compute_keypoint_distance:
         identity_quat = self.identity_quat_keypoints[: num_envs * self.num_keypoints]
 
         # Expand quaternions and positions for all keypoints
-        current_quat_expanded = current_quat.unsqueeze(1).expand(-1, self.num_keypoints, -1).reshape(-1, 4)
-        current_pos_expanded = current_pos.unsqueeze(1).expand(-1, self.num_keypoints, -1).reshape(-1, 3)
-        target_quat_expanded = target_quat.unsqueeze(1).expand(-1, self.num_keypoints, -1).reshape(-1, 4)
-        target_pos_expanded = target_pos.unsqueeze(1).expand(-1, self.num_keypoints, -1).reshape(-1, 3)
+        current_quat_expanded = current_quat.unsqueeze(1).expand(-1, self.num_keypoints,
+                                                                 -1).reshape(-1, 4)
+        current_pos_expanded = current_pos.unsqueeze(1).expand(-1, self.num_keypoints,
+                                                               -1).reshape(-1, 3)
+        target_quat_expanded = target_quat.unsqueeze(1).expand(-1, self.num_keypoints,
+                                                               -1).reshape(-1, 4)
+        target_pos_expanded = target_pos.unsqueeze(1).expand(-1, self.num_keypoints,
+                                                             -1).reshape(-1, 3)
 
         # Transform all keypoints at once
         keypoints_current_flat, _ = combine_frame_transforms(

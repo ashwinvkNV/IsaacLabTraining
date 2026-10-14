@@ -1,35 +1,32 @@
-# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# Copyright (c) 2022-2026, The Isaac Lab Project Developers
+# (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-
 """Tests for the DisplayPort training-optimization validation utility."""
 
 import json
 from pathlib import Path
 
+from isaaclab_training.cli.displayport_training_validation import analyze_training_log
+from isaaclab_training.cli.displayport_training_validation import Backend
+from isaaclab_training.cli.displayport_training_validation import EXPERIMENT_PROFILES
+from isaaclab_training.cli.displayport_training_validation import ExperimentProfile
+from isaaclab_training.cli.displayport_training_validation import ExperimentSpec
+from isaaclab_training.cli.displayport_training_validation import generate_experiment_matrix
+from isaaclab_training.cli.displayport_training_validation import main
+from isaaclab_training.cli.displayport_training_validation import RobotAsset
+from isaaclab_training.cli.displayport_training_validation import sample_count
+from isaaclab_training.cli.displayport_training_validation import sample_equivalent_iterations
+from isaaclab_training.cli.displayport_training_validation import schedule_for_experiment
+from isaaclab_training.cli.displayport_training_validation import training_command
+from isaaclab_training.cli.displayport_training_validation import TrainingHealthThresholds
+from isaaclab_training.cli.displayport_training_validation import validate_evidence_document
+from isaaclab_training.cli.displayport_training_validation import validate_experiment
+from isaaclab_training.cli.displayport_training_validation import ValidatedBackendLimits
+from isaaclab_training.cli.displayport_training_validation import VALIDATION_EVIDENCE_REQUIREMENTS
+from isaaclab_training.cli.displayport_training_validation import validation_evidence_template
 import pytest
-
-from isaaclab_training.cli.displayport_training_validation import (
-    EXPERIMENT_PROFILES,
-    VALIDATION_EVIDENCE_REQUIREMENTS,
-    Backend,
-    ExperimentProfile,
-    ExperimentSpec,
-    RobotAsset,
-    TrainingHealthThresholds,
-    ValidatedBackendLimits,
-    analyze_training_log,
-    generate_experiment_matrix,
-    main,
-    sample_count,
-    sample_equivalent_iterations,
-    schedule_for_experiment,
-    training_command,
-    validate_evidence_document,
-    validate_experiment,
-    validation_evidence_template,
-)
 
 
 def _spec(
@@ -211,13 +208,14 @@ def test_calibrated_experiment_requires_existing_absolute_usd(tmp_path: Path):
     calibrated = _spec(asset=RobotAsset.CALIBRATED, num_envs=1024)
 
     assert {item.code for item in validate_experiment(calibrated)} == {"calibrated_usd_missing"}
-    assert {item.code for item in validate_experiment(calibrated, calibrated_usd=Path("relative.usd"))} == {
-        "calibrated_usd_not_absolute"
-    }
+    assert {
+        item.code
+        for item in validate_experiment(calibrated, calibrated_usd=Path("relative.usd"))
+    } == {"calibrated_usd_not_absolute"}
     missing = tmp_path / "missing.usd"
-    assert {item.code for item in validate_experiment(calibrated, calibrated_usd=missing)} == {
-        "calibrated_usd_not_found"
-    }
+    assert {item.code
+            for item in validate_experiment(calibrated, calibrated_usd=missing)
+            } == {"calibrated_usd_not_found"}
     existing = tmp_path / "calibrated.usd"
     existing.touch()
     assert validate_experiment(calibrated, calibrated_usd=existing) == ()
@@ -232,10 +230,11 @@ def test_minibatch_contract_rejects_non_integral_batches():
         num_steps_per_env=7,
     )
 
-    assert {item.code for item in validate_experiment(spec)} == {
-        "too_many_minibatches",
-        "non_integral_minibatch",
-    }
+    assert {item.code
+            for item in validate_experiment(spec)} == {
+                "too_many_minibatches",
+                "non_integral_minibatch",
+            }
 
 
 def test_recurrent_minibatches_require_environment_divisibility_per_rank():
@@ -253,7 +252,8 @@ def test_single_gpu_command_builder_rejects_distributed_schedule():
         world_size=2,
     )
 
-    assert {item.code for item in validate_experiment(spec)} == {"distributed_command_not_supported"}
+    assert {item.code
+            for item in validate_experiment(spec)} == {"distributed_command_not_supported"}
     with pytest.raises(ValueError, match="single-GPU"):
         training_command(spec)
 
@@ -312,7 +312,8 @@ Loss/value_function: 0.2
 
     assert report.passed
     assert report.metrics["total_fps"] == [3900.0, 4100.0]
-    assert report.to_dict()["summary"]["terminal_success_rate"]["tail_median"] == pytest.approx(0.5)
+    assert report.to_dict()["summary"]["terminal_success_rate"]["tail_median"] == pytest.approx(
+        0.5)
 
 
 def test_training_log_health_parses_real_rsl_rl_console_labels_without_metric_overlap():
@@ -339,14 +340,16 @@ def test_training_log_health_serializes_non_finite_metrics_as_json_null(
     capsys: pytest.CaptureFixture[str],
 ):
     log_path = tmp_path / "non_finite.log"
-    log_path.write_text("Learning iteration 1/10\nSteps per second: 1000\nLoss/value_function: nan\n")
+    log_path.write_text(
+        "Learning iteration 1/10\nSteps per second: 1000\nLoss/value_function: nan\n")
 
     result = main(["analyze_log", str(log_path)])
     output = json.loads(capsys.readouterr().out)
 
     assert result == 1
     assert output["metrics"]["value_loss"] == [None]
-    assert {finding["code"] for finding in output["findings"]} >= {"non_finite", "non_finite_metric"}
+    assert {finding["code"]
+            for finding in output["findings"]} >= {"non_finite", "non_finite_metric"}
 
 
 @pytest.mark.parametrize(
@@ -426,11 +429,9 @@ def test_training_log_health_rejects_invalid_thresholds(thresholds: TrainingHeal
 def test_evidence_template_is_complete_but_cannot_accidentally_pass():
     template = validation_evidence_template()
     expected_metrics = {requirement.name for requirement in VALIDATION_EVIDENCE_REQUIREMENTS}
-    expected_metrics.update(
-        requirement.at_least_metric
-        for requirement in VALIDATION_EVIDENCE_REQUIREMENTS
-        if requirement.at_least_metric is not None
-    )
+    expected_metrics.update(requirement.at_least_metric
+                            for requirement in VALIDATION_EVIDENCE_REQUIREMENTS
+                            if requirement.at_least_metric is not None)
 
     assert set(template["metrics"]) == expected_metrics
     assert validate_evidence_document(template)
@@ -440,10 +441,13 @@ def test_evidence_template_is_complete_but_cannot_accidentally_pass():
     ("document", "expected_code"),
     [
         ([], "document_type"),
-        ({"schema_version": True}, "schema_version"),
+        ({
+            "schema_version": True
+        }, "schema_version"),
     ],
 )
-def test_evidence_validation_rejects_malformed_top_level_documents(document: object, expected_code: str):
+def test_evidence_validation_rejects_malformed_top_level_documents(document: object,
+                                                                   expected_code: str):
     violations = validate_evidence_document(document)
 
     assert expected_code in {item.code for item in violations}
@@ -451,6 +455,77 @@ def test_evidence_validation_rejects_malformed_top_level_documents(document: obj
 
 def test_measured_gpu_evidence_passes_all_contracts():
     assert validate_evidence_document(_passing_evidence()) == ()
+
+
+def test_evidence_validation_checks_artifacts_under_explicit_root(tmp_path: Path):
+    document = _passing_evidence()
+    document["artifacts"] = {
+        "logs": ["training.log"],
+        "videos": ["captures/scripted_insertion.mp4"],
+        "tables": ["physics_metrics.json"],
+    }
+    (tmp_path / "captures").mkdir()
+    for reference in ("training.log", "captures/scripted_insertion.mp4", "physics_metrics.json"):
+        artifact = tmp_path / reference
+        artifact.write_bytes(b"evidence")
+
+    assert validate_evidence_document(document, artifact_root=tmp_path) == ()
+
+
+@pytest.mark.parametrize(
+    ("reference", "expected_code"),
+    [
+        ("missing.log", "artifact_missing"),
+        ("empty.log", "artifact_empty"),
+        ("directory", "artifact_not_file"),
+        ("../outside.log", "artifact_path"),
+    ],
+)
+def test_evidence_validation_rejects_invalid_artifact_files(
+    tmp_path: Path,
+    reference: str,
+    expected_code: str,
+):
+    artifact_root = tmp_path / "evidence"
+    artifact_root.mkdir()
+    (artifact_root / "empty.log").touch()
+    (artifact_root / "directory").mkdir()
+    (tmp_path / "outside.log").write_bytes(b"outside")
+    document = _passing_evidence()
+    document["artifacts"]["logs"] = [reference]
+
+    violations = validate_evidence_document(document, artifact_root=artifact_root)
+
+    assert expected_code in {item.code for item in violations}
+
+
+def test_validate_evidence_cli_checks_paths_relative_to_evidence_file(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    document = _passing_evidence()
+    document["artifacts"] = {
+        "logs": ["training.log"],
+        "videos": ["scripted_insertion.mp4"],
+        "tables": ["physics_metrics.json"],
+    }
+    for reference in ("training.log", "scripted_insertion.mp4", "physics_metrics.json"):
+        (tmp_path / reference).write_bytes(b"evidence")
+    evidence_path = tmp_path / "displayport_validation.json"
+    evidence_path.write_text(json.dumps(document), encoding="utf-8")
+
+    result = main(["validate_evidence", str(evidence_path)])
+    output = json.loads(capsys.readouterr().out)
+
+    assert result == 0
+    assert output["passed"] is True
+    (tmp_path / "training.log").unlink()
+
+    result = main(["validate_evidence", str(evidence_path)])
+    output = json.loads(capsys.readouterr().out)
+
+    assert result == 1
+    assert "artifact_missing" in {item["code"] for item in output["violations"]}
 
 
 def test_evidence_validation_rejects_wrong_types_negative_values_and_missing_artifacts():
@@ -496,22 +571,21 @@ def test_evidence_validation_detects_physics_and_deployment_regressions():
     assert [item.code for item in violations].count("metric_regression") == 1
 
 
-def test_matrix_cli_returns_blocking_status_and_machine_readable_json(capsys: pytest.CaptureFixture[str]):
-    result = main(
-        [
-            "matrix",
-            "--backend",
-            "newton",
-            "--asset",
-            "nominal",
-            "--curriculum",
-            "on",
-            "--profile",
-            "e4096_s64_mb16",
-            "--format",
-            "json",
-        ]
-    )
+def test_matrix_cli_returns_blocking_status_and_machine_readable_json(
+        capsys: pytest.CaptureFixture[str]):
+    result = main([
+        "matrix",
+        "--backend",
+        "newton",
+        "--asset",
+        "nominal",
+        "--curriculum",
+        "on",
+        "--profile",
+        "e4096_s64_mb16",
+        "--format",
+        "json",
+    ])
     output = json.loads(capsys.readouterr().out)
 
     assert result == 2
@@ -520,23 +594,21 @@ def test_matrix_cli_returns_blocking_status_and_machine_readable_json(capsys: py
 
 
 def test_matrix_cli_generates_safe_bounded_newton_diagnostic(capsys: pytest.CaptureFixture[str]):
-    result = main(
-        [
-            "matrix",
-            "--backend",
-            "newton",
-            "--asset",
-            "nominal",
-            "--curriculum",
-            "on",
-            "--profile",
-            "e256_s100_mb16",
-            "--max_iterations",
-            "10",
-            "--format",
-            "json",
-        ]
-    )
+    result = main([
+        "matrix",
+        "--backend",
+        "newton",
+        "--asset",
+        "nominal",
+        "--curriculum",
+        "on",
+        "--profile",
+        "e256_s100_mb16",
+        "--max_iterations",
+        "10",
+        "--format",
+        "json",
+    ])
     output = json.loads(capsys.readouterr().out)
 
     assert result == 0
@@ -548,21 +620,19 @@ def test_matrix_cli_generates_safe_bounded_newton_diagnostic(capsys: pytest.Capt
 
 
 def test_sample_budget_cli_prints_exact_conversion(capsys: pytest.CaptureFixture[str]):
-    result = main(
-        [
-            "sample_budget",
-            "--reference_envs",
-            "1024",
-            "--reference_steps",
-            "512",
-            "--reference_iterations",
-            "500",
-            "--candidate_envs",
-            "1024",
-            "--candidate_steps",
-            "128",
-        ]
-    )
+    result = main([
+        "sample_budget",
+        "--reference_envs",
+        "1024",
+        "--reference_steps",
+        "512",
+        "--reference_iterations",
+        "500",
+        "--candidate_envs",
+        "1024",
+        "--candidate_steps",
+        "128",
+    ])
     output = json.loads(capsys.readouterr().out)
 
     assert result == 0

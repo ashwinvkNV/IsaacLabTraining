@@ -1,8 +1,25 @@
-# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+# Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Copyright (c) 2022-2026, The Isaac Lab Project Developers
+# (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-
 """Production DisplayPort insertion policy inference in simulation.
 
 Run a trained RSL-RL checkpoint **or** a LEAPP-exported ONNX policy with
@@ -81,8 +98,9 @@ Pose conventions
   socket pose.
 * If ``--robot_joint_pos`` is set, IK grasp reset is replaced with a plug snap
   into the gripper so the requested joints are preserved.
-* ``--replay_csv`` open-loop-replays absolute arm joint targets from a
-  ``policy_io.csv`` / ``real_policy.csv`` instead of running the policy. The
+* ``--replay_csv`` open-loop-replays absolute arm joint targets or normalized
+  six-dimensional task-space actions from a ``policy_io.csv`` / ``real_policy.csv``
+  instead of running the policy. The
   same ``policy_io.csv`` logging path is used. Checkpoint is optional in this
   mode. When init overrides are omitted, row 0 of the CSV seeds
   ``--robot_joint_pos`` and ``--observed_socket_*``.
@@ -103,54 +121,48 @@ from __future__ import annotations
 import argparse
 import contextlib
 import csv
+from dataclasses import dataclass
+from datetime import datetime
 import importlib.metadata as metadata
 import json
 import os
+from pathlib import Path
 import re
 import sys
 import time
-from dataclasses import dataclass
-from datetime import datetime
-from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any, TYPE_CHECKING
 
 import gymnasium as gym
-import numpy as np
-import torch
-import yaml
-from packaging import version
-from rsl_rl.runners import DistillationRunner, OnPolicyRunner
-
-import isaaclab.utils.math as math_utils
 from isaaclab.app import add_launcher_args, launch_simulation
 from isaaclab.envs import DirectMARLEnvCfg, DirectRLEnvCfg, ManagerBasedRLEnvCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils.assets import retrieve_file_path
+import isaaclab.utils.math as math_utils
+import numpy as np
+from packaging import version
+from rsl_rl.runners import DistillationRunner, OnPolicyRunner
+import torch
+import yaml
 
-# isaaclab.assets / warp must not be imported at module scope before SimulationApp starts.
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # Asset types must not load before SimulationApp starts.
     from isaaclab.assets import Articulation, RigidObject
 
 # local imports
 from isaaclab_rl.entrypoints.backends import cli_args_rsl_rl as cli_args
-from isaaclab_rl.rsl_rl import RslRlBaseRunnerCfg, RslRlVecEnvWrapper, handle_deprecated_rsl_rl_cfg
+from isaaclab_rl.entrypoints.common import resolve_play_task_name
+from isaaclab_rl.rsl_rl import handle_deprecated_rsl_rl_cfg, RslRlBaseRunnerCfg, RslRlVecEnvWrapper
 from isaaclab_rl.utils.pretrained_checkpoint import get_published_pretrained_checkpoint
-
 import isaaclab_tasks  # noqa: F401
-from isaaclab_training.export.contracts import (
-    process_task_space_action,
-    recover_task_space_policy_action,
-    resolve_task_space_input_spec,
-    resolve_task_space_input_terms,
-    task_space_action_scale,
-)
-from isaaclab_training.tasks.displayport_insertion.displayport_insertion_env_cfg import (
-    compute_plug_pose,
-    compute_socket_root,
-)
 from isaaclab_tasks.utils import get_checkpoint_path, setup_preset_cli
 from isaaclab_tasks.utils.hydra import hydra_task_config
+from isaaclab_training.export.contracts import (process_task_space_action,
+                                                recover_task_space_policy_action,
+                                                resolve_task_space_input_spec,
+                                                resolve_task_space_input_terms,
+                                                task_space_action_scale)
+from isaaclab_training.tasks.displayport_insertion.displayport_insertion_env_cfg import (
+    compute_plug_pose, compute_socket_root)
 
 from isaaclab_training.utils.success_utils import SuccessTracker  # isort: skip
 
@@ -163,12 +175,24 @@ parser = argparse.ArgumentParser(
 )
 parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=_DEFAULT_TASK, help="Registered gym task id.")
-parser.add_argument("--agent", type=str, default="rsl_rl_cfg_entry_point", help="RL agent configuration entry point.")
+parser.add_argument("--agent",
+                    type=str,
+                    default="rsl_rl_cfg_entry_point",
+                    help="RL agent configuration entry point.")
 parser.add_argument("--seed", type=int, default=None, help="Environment seed.")
+parser.add_argument("--use_pretrained_checkpoint",
+                    action="store_true",
+                    help="Use the published Nucleus pretrained checkpoint.")
+parser.add_argument("--real-time",
+                    action="store_true",
+                    default=False,
+                    help="Throttle stepping to wall-clock dt.")
 parser.add_argument(
-    "--use_pretrained_checkpoint", action="store_true", help="Use the published Nucleus pretrained checkpoint."
+    "--train_env_cfg",
+    action="store_true",
+    default=False,
+    help="Play the training configuration as-is, skipping the config's play_mode overrides.",
 )
-parser.add_argument("--real-time", action="store_true", default=False, help="Throttle stepping to wall-clock dt.")
 
 # Initial / observed state
 parser.add_argument(
@@ -177,11 +201,9 @@ parser.add_argument(
     nargs="+",
     default=None,
     metavar="VALUE_RAD | JOINT_NAME=VALUE_RAD",
-    help=(
-        "Starting joint positions in radians. Either 7 bare values in arm-joint order"
-        " (e.g. --robot_joint_pos 0.44 -0.25 0.04 2.23 -0.01 0.91 2.08) or 'name=value' pairs"
-        " (e.g. joint1=0.44). Disables IK grasp reset."
-    ),
+    help=("Starting joint positions in radians. Either 7 bare values in arm-joint order"
+          " (e.g. --robot_joint_pos 0.44 -0.25 0.04 2.23 -0.01 0.91 2.08) or 'name=value' pairs"
+          " (e.g. joint1=0.44). Disables IK grasp reset."),
 )
 parser.add_argument(
     "--socket_pos",
@@ -229,34 +251,29 @@ parser.add_argument(
     default=None,
     metavar="PATH",
     help=(
-        "Open-loop replay absolute arm joint targets from a policy_io / real_policy CSV "
-        "instead of running the policy. Accepts target_joint_pos_* (sim) or "
-        "safety_cmd_* + measured joints (real: absolute = joint + safety_cmd). "
-        "Checkpoint is optional. Ends after the CSV is exhausted unless --max_steps is smaller."
-    ),
+        "Open-loop replay commands from a policy_io / real_policy CSV instead of running "
+        "the policy. Joint tasks accept target_joint_pos_* or safety_cmd_* + measured "
+        "joints; task-space tasks accept action_raw_* or scaled action_*. "
+        "Checkpoint is optional. Ends after the CSV is exhausted unless --max_steps is smaller."),
 )
 parser.add_argument(
     "--leapp_model",
     type=str,
     default=None,
     metavar="PATH",
-    help=(
-        "Path to a LEAPP-exported deploy YAML, or a directory containing one "
-        "(e.g. logs/rsl_rl/dp_exps/displayport_default_model900). Runs the exported "
-        "ONNX policy via InferenceManager instead of an RSL-RL .pt checkpoint."
-    ),
+    help=("Path to a LEAPP-exported deploy YAML, or a directory containing one "
+          "(e.g. logs/rsl_rl/dp_exps/displayport_default_model900). Runs the exported "
+          "ONNX policy via InferenceManager instead of an RSL-RL .pt checkpoint."),
 )
 parser.add_argument(
     "--init_obs_csv",
     type=str,
     default=None,
     metavar="PATH",
-    help=(
-        "Closed-loop: feed the exact flat obs_* vector from this policy_io CSV as the "
-        "first policy observation (see --init_obs_step). Also seeds unset "
-        "--robot_joint_pos / --observed_socket_* from that row. Not compatible with "
-        "--replay_csv."
-    ),
+    help=("Closed-loop: feed the exact flat obs_* vector from this policy_io CSV as the "
+          "first policy observation (see --init_obs_step). Also seeds unset "
+          "--robot_joint_pos / --observed_socket_* from that row. Not compatible with "
+          "--replay_csv."),
 )
 parser.add_argument(
     "--init_obs_step",
@@ -266,7 +283,10 @@ parser.add_argument(
 )
 
 # Run control / logging
-parser.add_argument("--max_steps", type=int, default=None, help="Stop after this many policy steps.")
+parser.add_argument("--max_steps",
+                    type=int,
+                    default=None,
+                    help="Stop after this many policy steps.")
 parser.add_argument(
     "--num_episodes",
     type=int,
@@ -277,7 +297,8 @@ parser.add_argument(
     "--log_dir",
     type=str,
     default=None,
-    help=("Directory for run logs. Default: <checkpoint_or_leapp_dir>/inference_logs/<timestamp>."),
+    help=(
+        "Directory for run logs. Default: <checkpoint_or_leapp_dir>/inference_logs/<timestamp>."),
 )
 parser.add_argument("--no_print", action="store_true", help="Disable per-step terminal printing.")
 parser.add_argument(
@@ -297,9 +318,11 @@ add_launcher_args(parser)
 args_cli, remaining_args = setup_preset_cli(parser)
 sys.argv = [sys.argv[0]] + remaining_args
 
+# Separate ``-Play`` task ids were retired in favour of ``play_mode`` overrides; redirect any
+# remaining use to the training id (emits a deprecation warning) so older commands keep working.
+args_cli.task = resolve_play_task_name(args_cli.task)
+
 installed_version = metadata.version("rsl-rl-lib")
-
-
 # -- helpers -----------------------------------------------------------------
 
 
@@ -455,6 +478,116 @@ def _pack_rnn_state(h: np.ndarray | None, c: np.ndarray | None) -> np.ndarray | 
     return np.concatenate(parts, axis=0)
 
 
+def _find_rsl_recurrent_module(policy) -> tuple[torch.nn.Module, Any] | None:
+    """Find the underlying torch LSTM/GRU and the object holding its hidden state."""
+    if policy is None:
+        return None
+    queue = [policy]
+    seen: set[int] = set()
+    while queue:
+        candidate = queue.pop(0)
+        if candidate is None or id(candidate) in seen:
+            continue
+        seen.add(id(candidate))
+        if isinstance(candidate, (torch.nn.LSTM, torch.nn.GRU)):
+            return candidate, candidate
+        nested_rnn = getattr(candidate, "rnn", None)
+        if isinstance(nested_rnn, (torch.nn.LSTM, torch.nn.GRU)):
+            return nested_rnn, candidate
+        for attr in ("rnn", "memory_a", "actor"):
+            nested = getattr(candidate, attr, None)
+            if nested is not None:
+                queue.append(nested)
+    return None
+
+
+def _restore_rsl_rnn_state(policy, packed: np.ndarray, num_envs: int) -> None:
+    """Restore one CSV row's packed recurrent state into an RSL-RL policy.
+
+    ``packed`` follows the logger schema: each LSTM layer contributes ``h`` then ``c``;
+    each GRU layer contributes only ``h``. The row is broadcast to every simulated env.
+    """
+    found = _find_rsl_recurrent_module(policy)
+    if found is None:
+        raise ValueError(
+            "--init_obs_csv contains rnn_in_* columns, but the RSL-RL policy has no "
+            "discoverable LSTM/GRU state. Use a CSV and checkpoint with matching policy types."
+        )
+    recurrent, state_owner = found
+    if num_envs < 1:
+        raise ValueError(f"Cannot restore recurrent state for num_envs={num_envs}.")
+
+    flat = np.asarray(packed, dtype=np.float64).reshape(-1)
+    num_layers = int(recurrent.num_layers)
+    hidden_size = int(recurrent.hidden_size)
+    is_lstm = isinstance(recurrent, torch.nn.LSTM)
+    components = 2 if is_lstm else 1
+    expected = num_layers * hidden_size * components
+    if flat.size != expected:
+        kind = "LSTM" if is_lstm else "GRU"
+        raise ValueError(
+            f"Logged rnn_in dimension {flat.size} does not match the {kind} checkpoint: "
+            f"expected {expected} ({num_layers} layers x {hidden_size} hidden x "
+            f"{components} state components)."
+        )
+    if not np.isfinite(flat).all():
+        raise ValueError("Logged rnn_in contains non-finite values.")
+
+    try:
+        parameter = next(recurrent.parameters())
+        device, dtype = parameter.device, parameter.dtype
+    except StopIteration:
+        device, dtype = torch.device("cpu"), torch.float32
+    h = torch.empty((num_layers, num_envs, hidden_size), device=device, dtype=dtype)
+    c = torch.empty_like(h) if is_lstm else None
+    cursor = 0
+    for layer in range(num_layers):
+        h_values = torch.as_tensor(
+            flat[cursor:cursor + hidden_size], device=device, dtype=dtype
+        )
+        h[layer] = h_values.unsqueeze(0).expand(num_envs, -1)
+        cursor += hidden_size
+        if c is not None:
+            c_values = torch.as_tensor(
+                flat[cursor:cursor + hidden_size], device=device, dtype=dtype
+            )
+            c[layer] = c_values.unsqueeze(0).expand(num_envs, -1)
+            cursor += hidden_size
+    state = (h, c) if c is not None else h
+
+    restored = False
+    for target in (policy, state_owner):
+        reset = getattr(target, "reset", None)
+        if reset is None:
+            continue
+        try:
+            reset(hidden_state=state)
+            restored = True
+            break
+        except TypeError:
+            try:
+                reset(None, state)
+                restored = True
+                break
+            except TypeError:
+                continue
+    if not restored and hasattr(state_owner, "hidden_state"):
+        state_owner.hidden_state = state
+        restored = True
+    if not restored:
+        raise ValueError(
+            "Found the RSL-RL recurrent module but could not set its hidden state; "
+            "the checkpoint API is incompatible with replay initialization."
+        )
+
+    restored_h, restored_c = _extract_lstm_hidden_state(policy)
+    restored_packed = _pack_rnn_state(restored_h, restored_c)
+    if restored_packed is None or restored_packed.size != flat.size or not np.allclose(
+        restored_packed, flat, rtol=1e-5, atol=1e-6
+    ):
+        raise RuntimeError("RSL-RL recurrent state did not match rnn_in_* after restoration.")
+
+
 def _parse_robot_joint_pos(entries: list[str], ordered_joint_names: list[str]) -> dict[str, float]:
     """Parse ``--robot_joint_pos`` as either bare ordered values or ``name=value`` pairs.
 
@@ -465,7 +598,8 @@ def _parse_robot_joint_pos(entries: list[str], ordered_joint_names: list[str]) -
     named = [e for e in entries if "=" in e]
     if named and len(named) != len(entries):
         raise ValueError(
-            "--robot_joint_pos must be either all bare values (positional) or all 'name=value' pairs, not mixed."
+            "--robot_joint_pos must be either all bare values (positional) or all 'name=value' "
+            "pairs, not mixed."
         )
 
     if named:
@@ -474,9 +608,9 @@ def _parse_robot_joint_pos(entries: list[str], ordered_joint_names: list[str]) -
     values = [float(e) for e in entries]
     if len(values) > len(ordered_joint_names):
         raise ValueError(
-            f"--robot_joint_pos got {len(values)} values but only {len(ordered_joint_names)} arm joints are known"
-            f" ({ordered_joint_names}). Use 'name=value' pairs to set gripper joints."
-        )
+            f"--robot_joint_pos got {len(values)} values but only {len(ordered_joint_names)} "
+            f"arm joints are known"
+            f" ({ordered_joint_names}). Use 'name=value' pairs to set gripper joints.")
     return dict(zip(ordered_joint_names, values))
 
 
@@ -492,6 +626,12 @@ def _arm_joint_names(env_cfg) -> list[str]:
     return [f"joint{i + 1}" for i in range(num_arm)]
 
 
+def _is_task_space_action_cfg(env_cfg) -> bool:
+    """Return whether the environment uses the six-dimensional pose-delta action."""
+    action_cfg = env_cfg.actions.arm_action
+    return hasattr(action_cfg, "position_scale") and hasattr(action_cfg, "orientation_scale")
+
+
 def _trailing_int(name: str) -> int:
     m = re.search(r"(\d+)$", name)
     return int(m.group(1)) if m else 1_000_000
@@ -499,15 +639,16 @@ def _trailing_int(name: str) -> int:
 
 @dataclass
 class ReplayTrajectory:
-    """Open-loop arm joint targets loaded from a policy I/O CSV."""
+    """Open-loop commands loaded from a policy I/O CSV."""
 
     path: Path
-    source: str  # how absolute targets were derived
-    targets: np.ndarray  # (T, num_arm) absolute joint positions [rad]
+    source: str  # how replay commands were derived
+    targets: np.ndarray  # (T, A): absolute joints or raw task-space policy actions
+    action_space: str = "joint"  # ``joint`` or ``task_space``
     init_joint_pos: np.ndarray | None = None  # (num_arm,)
     observed_socket_pos: np.ndarray | None = None  # (3,)
     observed_socket_rot: np.ndarray | None = None  # (4,) xyzw
-    csv_actions: np.ndarray | None = None  # (T, num_arm) original logged actions, if present
+    csv_actions: np.ndarray | None = None  # original deploy-facing logged actions, if present
 
     @property
     def num_steps(self) -> int:
@@ -518,10 +659,15 @@ class ReplayTrajectory:
         return int(self.targets.shape[1])
 
 
-def load_replay_trajectory(path: str | Path, num_arm_joints: int = 7) -> ReplayTrajectory:
-    """Load absolute arm joint targets from a sim or real ``policy_io``-style CSV.
+def load_replay_trajectory(
+    path: str | Path,
+    num_arm_joints: int = 7,
+    task_space_scale: np.ndarray | None = None,
+    clip_actions: float | None = None,
+) -> ReplayTrajectory:
+    """Load joint targets or task-space policy actions from a ``policy_io`` CSV.
 
-    Column priority (see ``policy_io_csv_schema.md``):
+    Joint-space column priority (see ``policy_io_csv_schema.md``):
     1. ``blend_cmd_*`` — absolute blended/safety-limited command written to hardware (real).
        In sim this is the policy-intent target (``q + scale * raw``), which is the
        faithful thing to replay.
@@ -531,6 +677,11 @@ def load_replay_trajectory(path: str | Path, num_arm_joints: int = 7) -> ReplayT
        ``safety_cmd`` is a scaled delta (``joint + safety_cmd``).
     4. ``action_{i}`` — policy output; for this DisplayPort deploy the values are
        absolute joint targets (rejected if they do not look like joint angles).
+
+    When ``task_space_scale`` is provided, the loader instead requires six task-space
+    actions. It prefers the exact normalized network outputs in ``action_raw_*``. If only
+    deploy-facing ``action_*`` columns exist, it inverts the logged clipped-and-scaled
+    Cartesian deltas using ``task_space_scale`` and ``clip_actions``.
     """
     csv_path = Path(path).expanduser().resolve()
     if not csv_path.is_file():
@@ -553,11 +704,17 @@ def load_replay_trajectory(path: str | Path, num_arm_joints: int = 7) -> ReplayT
         key=_trailing_int,
     )
     blend_keys = sorted(
-        [k for k in header if re.search(r"blend_cmd_.*joint\d+$", k) or re.fullmatch(r"blend_cmd_\d+", k)],
+        [
+            k for k in header
+            if re.search(r"blend_cmd_.*joint\d+$", k) or re.fullmatch(r"blend_cmd_\d+", k)
+        ],
         key=_trailing_int,
     )
     safety_keys = sorted(
-        [k for k in header if re.search(r"safety_cmd_.*joint\d+$", k) or re.fullmatch(r"safety_cmd_\d+", k)],
+        [
+            k for k in header
+            if re.search(r"safety_cmd_.*joint\d+$", k) or re.fullmatch(r"safety_cmd_\d+", k)
+        ],
         key=_trailing_int,
     )
     # Prefer explicit arm joint_pos columns; fall back to obs_0..N-1.
@@ -566,10 +723,41 @@ def load_replay_trajectory(path: str | Path, num_arm_joints: int = 7) -> ReplayT
         joint_keys = [k for k in header if re.search(r"joint_.*joint\d+_pos$", k)]
     joint_keys = sorted(joint_keys, key=_trailing_int)
     act_keys = sorted([k for k in header if re.fullmatch(r"action_\d+", k)], key=_trailing_int)
+    raw_act_keys = sorted(
+        [k for k in header if re.fullmatch(r"action_raw_\d+", k)], key=_trailing_int
+    )
     obs_keys = sorted([k for k in header if re.fullmatch(r"obs_\d+", k)], key=_trailing_int)
 
     source: str
-    if len(blend_keys) >= num_arm_joints:
+    is_task_space = task_space_scale is not None
+    if is_task_space:
+        scale = np.asarray(task_space_scale, dtype=np.float64).reshape(-1)
+        if scale.size != 6:
+            raise ValueError(
+                f"Task-space replay scale must have 6 values, got {scale.size}: {scale.tolist()}"
+            )
+        if len(raw_act_keys) >= 6:
+            targets = _stack(raw_act_keys[:6])
+            source = "action_raw (task-space)"
+        elif len(act_keys) >= 6:
+            deploy_actions = _stack(act_keys[:6])
+            targets = (
+                recover_task_space_policy_action(
+                    torch.as_tensor(deploy_actions, dtype=torch.float64),
+                    torch.as_tensor(scale, dtype=torch.float64).reshape(1, 6),
+                    clip_actions,
+                )
+                .cpu()
+                .numpy()
+            )
+            source = "action (task-space scaled)"
+        else:
+            raise ValueError(
+                f"--replay_csv {csv_path} has no usable task-space actions. Need six "
+                f"action_raw_* or action_* columns; found raw={len(raw_act_keys)}, "
+                f"action={len(act_keys)}."
+            )
+    elif len(blend_keys) >= num_arm_joints:
         targets = _stack(blend_keys[:num_arm_joints])
         source = "blend_cmd"
     elif len(tgt_keys) >= num_arm_joints:
@@ -580,46 +768,48 @@ def load_replay_trajectory(path: str | Path, num_arm_joints: int = 7) -> ReplayT
         deltas = _stack(safety_keys[:num_arm_joints])
         targets = measured + deltas
         source = "joint_pos+safety_cmd"
-        print("[INFO] Replay CSV uses real-style safety_cmd deltas; absolute targets = measured_joint + safety_cmd.")
+        print(
+            "[INFO] Replay CSV uses real-style safety_cmd deltas; absolute targets = "
+            "measured_joint + safety_cmd."
+        )
     elif len(act_keys) >= num_arm_joints:
         candidate = _stack(act_keys[:num_arm_joints])
         # Guard against older sim logs where action_* held raw normalized output.
         reference = (
-            _stack(joint_keys[:num_arm_joints])[0]
-            if len(joint_keys) >= num_arm_joints
-            else (_stack(obs_keys[:num_arm_joints])[0] if len(obs_keys) >= num_arm_joints else None)
-        )
+            _stack(joint_keys[:num_arm_joints])[0] if len(joint_keys) >= num_arm_joints else
+            (_stack(obs_keys[:num_arm_joints])[0] if len(obs_keys) >= num_arm_joints else None))
         if reference is not None and np.max(np.abs(candidate[0] - reference)) > 0.5:
             raise ValueError(
                 f"--replay_csv {csv_path}: action_* does not look like absolute joint angles "
                 f"(row 0 differs from measured joints by "
                 f"{np.max(np.abs(candidate[0] - reference)):.3f} rad). Prefer blend_cmd_* / "
-                "target_joint_pos_* or re-log with the current schema."
-            )
+                "target_joint_pos_* or re-log with the current schema.")
         targets = candidate
         source = "action (absolute)"
     else:
         raise ValueError(
             f"--replay_csv {csv_path} has no usable joint targets. Need "
             f"blend_cmd_*, target_joint_pos_*, safety_cmd_* + joint_*_pos, or absolute action_*. "
-            f"Found: blend={len(blend_keys)}, target={len(tgt_keys)}, safety_cmd={len(safety_keys)}, "
-            f"joint={len(joint_keys)}, action={len(act_keys)}."
-        )
+            f"Found: blend={len(blend_keys)}, target={len(tgt_keys)}, "
+            f"safety_cmd={len(safety_keys)}, "
+            f"joint={len(joint_keys)}, action={len(act_keys)}.")
 
     init_joint_pos = None
     if len(joint_keys) >= num_arm_joints:
         init_joint_pos = _stack(joint_keys[:num_arm_joints])[0]
-    elif len(obs_keys) >= num_arm_joints:
+    elif not is_task_space and len(obs_keys) >= num_arm_joints:
         init_joint_pos = _stack(obs_keys[:num_arm_joints])[0]
 
     observed_socket_pos = observed_socket_rot = None
     if all(k in header for k in ("goal_px", "goal_py", "goal_pz")):
         observed_socket_pos = np.asarray(
-            [float(rows[0]["goal_px"]), float(rows[0]["goal_py"]), float(rows[0]["goal_pz"])],
+            [float(rows[0]["goal_px"]),
+             float(rows[0]["goal_py"]),
+             float(rows[0]["goal_pz"])],
             dtype=np.float64,
         )
-    elif len(obs_keys) >= num_arm_joints + 3:
-        observed_socket_pos = _stack(obs_keys[num_arm_joints : num_arm_joints + 3])[0]
+    elif not is_task_space and len(obs_keys) >= num_arm_joints + 3:
+        observed_socket_pos = _stack(obs_keys[num_arm_joints:num_arm_joints + 3])[0]
     if all(k in header for k in ("goal_qx", "goal_qy", "goal_qz", "goal_qw")):
         observed_socket_rot = np.asarray(
             [
@@ -630,19 +820,19 @@ def load_replay_trajectory(path: str | Path, num_arm_joints: int = 7) -> ReplayT
             ],
             dtype=np.float64,
         )
-    elif len(obs_keys) >= num_arm_joints + 7:
-        observed_socket_rot = _stack(obs_keys[num_arm_joints + 3 : num_arm_joints + 7])[0]
+    elif not is_task_space and len(obs_keys) >= num_arm_joints + 7:
+        observed_socket_rot = _stack(obs_keys[num_arm_joints + 3:num_arm_joints + 7])[0]
 
-    csv_actions = _stack(act_keys[:num_arm_joints]) if len(act_keys) >= num_arm_joints else None
+    action_width = 6 if is_task_space else num_arm_joints
+    csv_actions = _stack(act_keys[:action_width]) if len(act_keys) >= action_width else None
 
-    print(
-        f"[INFO] Loaded replay trajectory from {csv_path}: "
-        f"{targets.shape[0]} steps, {targets.shape[1]} arm joints, source={source}"
-    )
+    print(f"[INFO] Loaded replay trajectory from {csv_path}: "
+          f"{targets.shape[0]} steps, action_dim={targets.shape[1]}, source={source}")
     return ReplayTrajectory(
         path=csv_path,
         source=source,
         targets=targets,
+        action_space="task_space" if is_task_space else "joint",
         init_joint_pos=init_joint_pos,
         observed_socket_pos=observed_socket_pos,
         observed_socket_rot=observed_socket_rot,
@@ -667,12 +857,18 @@ def load_init_policy_obs(
     path: str | Path,
     step: int = 0,
     num_arm_joints: int = 7,
+    task_space: bool = False,
 ) -> InitPolicyObs:
     """Load flat ``obs_*`` (and optional ``rnn_in_*``) from one CSV row.
 
     Expected NoJointVel layout: ``[joint_pos(7), socket_pos(3), socket_quat(4)]``.
     With joint velocity in the actor: ``[joint_pos(7), joint_vel(7), socket_pos(3),
     socket_quat(4)]``. Socket slices are taken from the end of the vector.
+
+    A task-space actor's 18D observation has a different semantic layout. In that mode,
+    scene initialization is derived only from explicit ``joint_*_pos`` and ``goal_*``
+    columns; opaque ``obs_*`` entries are still injected into the policy but are never
+    guessed to be joints or a socket pose.
     """
     csv_path = Path(path).expanduser().resolve()
     if not csv_path.is_file():
@@ -700,15 +896,28 @@ def load_init_policy_obs(
     rin_keys = sorted([k for k in header if re.fullmatch(r"rnn_in_\d+", k)], key=_trailing_int)
     rnn_in = np.asarray([float(row[k]) for k in rin_keys], dtype=np.float64) if rin_keys else None
 
-    joint_pos = obs[:num_arm_joints].copy() if obs.size >= num_arm_joints else None
+    joint_keys = [k for k in header if re.fullmatch(r"joint_joint\d+_pos", k)]
+    if not joint_keys:
+        joint_keys = [k for k in header if re.search(r"joint_.*joint\d+_pos$", k)]
+    joint_keys = sorted(joint_keys, key=_trailing_int)
+    if len(joint_keys) >= num_arm_joints:
+        joint_pos = np.asarray(
+            [float(row[k]) for k in joint_keys[:num_arm_joints]], dtype=np.float64
+        )
+    elif not task_space and obs.size >= num_arm_joints:
+        joint_pos = obs[:num_arm_joints].copy()
+    else:
+        joint_pos = None
     observed_socket_pos = observed_socket_rot = None
     # Prefer explicit goal_* columns when present (real logger), else obs tail.
     if all(k in header for k in ("goal_px", "goal_py", "goal_pz")):
         observed_socket_pos = np.asarray(
-            [float(row["goal_px"]), float(row["goal_py"]), float(row["goal_pz"])],
+            [float(row["goal_px"]),
+             float(row["goal_py"]),
+             float(row["goal_pz"])],
             dtype=np.float64,
         )
-    elif obs.size >= num_arm_joints + 7:
+    elif not task_space and obs.size >= num_arm_joints + 7:
         # socket_pos/quat are always the last 7 entries of the actor obs.
         observed_socket_pos = obs[-7:-4].copy()
     if all(k in header for k in ("goal_qx", "goal_qy", "goal_qz", "goal_qw")):
@@ -721,13 +930,12 @@ def load_init_policy_obs(
             ],
             dtype=np.float64,
         )
-    elif obs.size >= 4:
+    elif not task_space and obs.size >= 4:
         observed_socket_rot = obs[-4:].copy()
 
-    print(
-        f"[INFO] Loaded init policy obs from {csv_path} row {step}: "
-        f"obs_dim={obs.size}" + (f", rnn_in_dim={rnn_in.size}" if rnn_in is not None else ", rnn_in=absent")
-    )
+    print(f"[INFO] Loaded init policy obs from {csv_path} row {step}: "
+          f"obs_dim={obs.size}" +
+          (f", rnn_in_dim={rnn_in.size}" if rnn_in is not None else ", rnn_in=absent"))
     return InitPolicyObs(
         path=csv_path,
         step=step,
@@ -770,9 +978,9 @@ def _replace_policy_obs_vector(obs, flat: np.ndarray, num_envs: int, device):
             pol = obs["policy"]
             if torch.is_tensor(pol) and pol.shape[-1] != flat_t.numel():
                 raise ValueError(
-                    f"--init_obs_csv obs dim {flat_t.numel()} != live policy obs dim {pol.shape[-1]}. "
-                    "Use a CSV recorded with the same task / observation layout."
-                )
+                    f"--init_obs_csv obs dim {flat_t.numel()} != live policy obs dim "
+                    f"{pol.shape[-1]}. "
+                    "Use a CSV recorded with the same task / observation layout.")
             # TensorDict supports item assignment; fall back to clone+set.
             with contextlib.suppress(Exception):
                 obs = obs.clone()
@@ -781,7 +989,8 @@ def _replace_policy_obs_vector(obs, flat: np.ndarray, num_envs: int, device):
 
     if torch.is_tensor(obs):
         if obs.shape[-1] != flat_t.numel():
-            raise ValueError(f"--init_obs_csv obs dim {flat_t.numel()} != live obs dim {obs.shape[-1]}.")
+            raise ValueError(
+                f"--init_obs_csv obs dim {flat_t.numel()} != live obs dim {obs.shape[-1]}.")
         out = obs.clone()
         out[:] = tiled.to(device=obs.device, dtype=obs.dtype)
         return out
@@ -845,8 +1054,27 @@ def _absolute_targets_to_relative_actions(
     rel = (targets_1d - q[:num_arm]) / scale
     if clip_actions is not None:
         rel = np.clip(rel, -clip_actions, clip_actions)
-    actions = torch.zeros((base.num_envs, env.num_actions), device=base.device, dtype=torch.float32)
+    actions = torch.zeros((base.num_envs, env.num_actions),
+                          device=base.device,
+                          dtype=torch.float32)
     actions[:, :num_arm] = torch.as_tensor(rel, device=base.device, dtype=torch.float32)
+    return actions
+
+
+def _task_space_replay_actions(env, raw_action_1d: np.ndarray) -> torch.Tensor:
+    """Expand one six-dimensional normalized task-space action across all environments."""
+    base = env.unwrapped
+    raw = np.asarray(raw_action_1d, dtype=np.float64).reshape(-1)
+    if raw.size != 6:
+        raise ValueError(f"Task-space replay action must have 6 values, got {raw.size}.")
+    if env.num_actions < 6:
+        raise ValueError(
+            f"Task-space replay needs at least 6 environment actions, got {env.num_actions}."
+        )
+    actions = torch.zeros(
+        (base.num_envs, env.num_actions), device=base.device, dtype=torch.float32
+    )
+    actions[:, :6] = torch.as_tensor(raw, device=base.device, dtype=torch.float32)
     return actions
 
 
@@ -874,9 +1102,13 @@ def resolve_leapp_model_yaml(path: str | Path) -> Path:
         return yaml_files[0]
     if deploy_candidates:
         names = ", ".join(p.name for p in deploy_candidates)
-        raise ValueError(f"Multiple deploy YAML files under {model_path}: {names}. Pass the YAML path explicitly.")
+        raise ValueError(
+            f"Multiple deploy YAML files under {model_path}: {names}. Pass the YAML path "
+            f"explicitly."
+        )
     names = ", ".join(p.name for p in yaml_files)
-    raise ValueError(f"Multiple YAML files under {model_path}: {names}. Pass the YAML path explicitly.")
+    raise ValueError(
+        f"Multiple YAML files under {model_path}: {names}. Pass the YAML path explicitly.")
 
 
 class LeappDisplayportPolicy:
@@ -898,7 +1130,8 @@ class LeappDisplayportPolicy:
             from leapp import InferenceManager
         except ImportError as exc:
             raise ImportError(
-                "LEAPP is required for --leapp_model. Install this repo with: uv sync --group leapp"
+                "LEAPP is required for --leapp_model. Install this repo with: uv sync --group "
+                "leapp"
             ) from exc
 
         self.env = env
@@ -921,13 +1154,16 @@ class LeappDisplayportPolicy:
             pass
 
         self.input_names = list(pipeline["inputs"][self.node_name])
-        external_inputs = [name for name in self.input_names if not name.startswith("actor_state_")]
+        external_inputs = [
+            name for name in self.input_names if not name.startswith("actor_state_")
+        ]
         task_space_inputs = {"eef_pos", "eef_rot_6d", "socket_kp_pos", "socket_kp_rot_6d"}
-        self._is_task_space = (
-            len(external_inputs) == len(task_space_inputs) and set(external_inputs) == task_space_inputs
-        )
-        self._task_space_input_spec = resolve_task_space_input_spec(self.base.cfg) if self._is_task_space else None
-        self._task_space_input_terms = resolve_task_space_input_terms(self.base.cfg) if self._is_task_space else None
+        self._is_task_space = (len(external_inputs) == len(task_space_inputs)
+                               and set(external_inputs) == task_space_inputs)
+        self._task_space_input_spec = resolve_task_space_input_spec(
+            self.base.cfg) if self._is_task_space else None
+        self._task_space_input_terms = resolve_task_space_input_terms(
+            self.base.cfg) if self._is_task_space else None
         self._joint_ids = None if self._is_task_space else self._resolve_arm_joint_ids()
         self.last_outputs: dict[str, torch.Tensor] = {}
         self.last_absolute_targets: np.ndarray | None = None
@@ -954,9 +1190,13 @@ class LeappDisplayportPolicy:
     def _resolve_arm_joint_ids(self) -> list[int] | None:
         robot = self.base.scene["robot"]
         try:
-            names = list(self.base.cfg.observations.policy.joint_pos.params["asset_cfg"].joint_names)
+            names = list(
+                self.base.cfg.observations.policy.joint_pos.params["asset_cfg"].joint_names)
         except Exception:
-            names = [f"joint{i + 1}" for i in range(int(getattr(self.base.cfg, "num_arm_joints", 7) or 7))]
+            names = [
+                f"joint{i + 1}"
+                for i in range(int(getattr(self.base.cfg, "num_arm_joints", 7) or 7))
+            ]
         if not names:
             return None
         # Exact names if provided; otherwise treat as regex patterns via find_joints.
@@ -988,7 +1228,8 @@ class LeappDisplayportPolicy:
                 flat = torch.as_tensor(forced, device=device, dtype=torch.float32).reshape(-1)
                 self._forced_flat_obs = None
                 if flat.numel() != 18:
-                    raise ValueError(f"Forced task-space LEAPP obs dim must be 18; got {flat.numel()}.")
+                    raise ValueError(
+                        f"Forced task-space LEAPP obs dim must be 18; got {flat.numel()}.")
                 assert self._task_space_input_spec is not None
                 for name, index, *_ in self._task_space_input_spec:
                     values[name] = flat[index].unsqueeze(0).expand(n, -1).contiguous()
@@ -1002,11 +1243,13 @@ class LeappDisplayportPolicy:
                     policy_obs = policy_obs.unsqueeze(0)
                 if policy_obs.shape[-1] != 18:
                     raise ValueError(
-                        f"Task-space policy observation must have 18 values; got {tuple(policy_obs.shape)}."
+                        f"Task-space policy observation must have 18 values; got "
+                        f"{tuple(policy_obs.shape)}."
                     )
                 if policy_obs.shape[0] != n:
                     raise ValueError(
-                        f"Task-space observation batch {policy_obs.shape[0]} does not match {n} environments."
+                        f"Task-space observation batch {policy_obs.shape[0]} does not match {n} "
+                        f"environments."
                     )
                 assert self._task_space_input_spec is not None
                 for name, index, *_ in self._task_space_input_spec:
@@ -1027,8 +1270,7 @@ class LeappDisplayportPolicy:
             if flat.numel() < 7 + 3 + 4:
                 raise ValueError(
                     f"Forced LEAPP obs dim {flat.numel()} too small; need at least 14 "
-                    "(joint_pos + socket_pos + socket_quat)."
-                )
+                    "(joint_pos + socket_pos + socket_quat).")
             socket_quat = flat[-4:].unsqueeze(0).expand(n, -1).contiguous()
             socket_pos = flat[-7:-4].unsqueeze(0).expand(n, -1).contiguous()
             remainder = flat[:-7]
@@ -1037,9 +1279,9 @@ class LeappDisplayportPolicy:
             for name in self.input_names:
                 if name in ("robot_joint_pos", "arm_dof_pos", "joint_pos"):
                     values[name] = joint_pos
-                elif name in ("socket_pos",):
+                elif name in ("socket_pos", ):
                     values[name] = socket_pos
-                elif name in ("socket_quat",):
+                elif name in ("socket_quat", ):
                     values[name] = socket_quat
                 elif name in ("robot_joint_vel", "arm_dof_vel", "joint_vel"):
                     if remainder.numel() >= 14:
@@ -1049,10 +1291,8 @@ class LeappDisplayportPolicy:
                 elif name.startswith("actor_state_"):
                     continue
                 else:
-                    raise KeyError(
-                        f"Unsupported LEAPP input '{name}' under forced obs. "
-                        "Expected robot_joint_pos / socket_pos / socket_quat."
-                    )
+                    raise KeyError(f"Unsupported LEAPP input '{name}' under forced obs. "
+                                   "Expected robot_joint_pos / socket_pos / socket_quat.")
             return {f"{self.node_name}/{name}": tensor for name, tensor in values.items()}
 
         robot = self.base.scene["robot"]
@@ -1064,9 +1304,9 @@ class LeappDisplayportPolicy:
         for name in self.input_names:
             if name in ("robot_joint_pos", "arm_dof_pos", "joint_pos"):
                 values[name] = joint_pos
-            elif name in ("socket_pos",):
+            elif name in ("socket_pos", ):
                 values[name] = self._read_observation_term("socket_pos")
-            elif name in ("socket_quat",):
+            elif name in ("socket_quat", ):
                 values[name] = self._read_observation_term("socket_quat")
             elif name.startswith("actor_state_"):
                 # Feedback tensors are owned by InferenceManager; omit from external inputs.
@@ -1074,8 +1314,7 @@ class LeappDisplayportPolicy:
             else:
                 raise KeyError(
                     f"Unsupported LEAPP input '{name}' for DisplayPort play. "
-                    "Expected robot_joint_pos / socket_pos / socket_quat (plus LSTM feedback)."
-                )
+                    "Expected robot_joint_pos / socket_pos / socket_quat (plus LSTM feedback).")
 
         return {f"{self.node_name}/{name}": tensor for name, tensor in values.items()}
 
@@ -1137,6 +1376,76 @@ class LeappDisplayportPolicy:
             return None
         return self._pack_layer_states([buf[n] for n in names])
 
+    def restore_packed_rnn_state(self, packed: np.ndarray) -> None:
+        """Restore packed ``rnn_in_*`` values into LEAPP feedback input buffers."""
+        buf = getattr(self.inference, "value_dict", {}).get(self.node_name, {})
+        names = self._feedback_layer_names()
+        if not names:
+            raise ValueError(
+                "--init_obs_csv contains rnn_in_* columns, but the LEAPP model has no "
+                "actor_state_*_in feedback buffers."
+            )
+
+        layouts: list[tuple[str, Any, int, int]] = []
+        expected = 0
+        for name in names:
+            state = buf[name]
+            ndim = int(state.ndim)
+            if ndim == 3:
+                if state.shape[0] not in (1, 2):
+                    raise ValueError(
+                        f"LEAPP feedback buffer {name} has unsupported shape {tuple(state.shape)}."
+                    )
+                components = int(state.shape[0])
+                hidden_size = int(state.shape[-1])
+            elif ndim in (1, 2):
+                components = 1
+                hidden_size = int(state.shape[-1])
+            else:
+                raise ValueError(
+                    f"LEAPP feedback buffer {name} has unsupported shape {tuple(state.shape)}."
+                )
+            layouts.append((name, state, components, hidden_size))
+            expected += components * hidden_size
+
+        flat = np.asarray(packed, dtype=np.float64).reshape(-1)
+        if flat.size != expected:
+            summary = ", ".join(f"{name}{tuple(state.shape)}" for name, state, _, _ in layouts)
+            raise ValueError(
+                f"Logged rnn_in dimension {flat.size} does not match LEAPP feedback buffers: "
+                f"expected {expected} from {summary}."
+            )
+        if not np.isfinite(flat).all():
+            raise ValueError("Logged rnn_in contains non-finite values.")
+
+        cursor = 0
+        with torch.no_grad():
+            for _, state, components, hidden_size in layouts:
+                values = flat[cursor:cursor + components * hidden_size].reshape(
+                    components, hidden_size
+                )
+                cursor += components * hidden_size
+                if torch.is_tensor(state):
+                    source = torch.as_tensor(values, device=state.device, dtype=state.dtype)
+                    if state.ndim == 3:
+                        state.copy_(source.unsqueeze(1).expand(-1, state.shape[1], -1))
+                    elif state.ndim == 2:
+                        state.copy_(source[0].unsqueeze(0).expand(state.shape[0], -1))
+                    else:
+                        state.copy_(source[0])
+                elif state.ndim == 3:
+                    state[...] = np.broadcast_to(values[:, None, :], state.shape)
+                elif state.ndim == 2:
+                    state[...] = np.broadcast_to(values[0], state.shape)
+                else:
+                    state[...] = values[0]
+
+        restored = self._read_feedback_packed()
+        if restored is None or restored.size != flat.size or not np.allclose(
+            restored, flat, rtol=1e-5, atol=1e-6
+        ):
+            raise RuntimeError("LEAPP recurrent state did not match rnn_in_* after restoration.")
+
     def __call__(self, obs=None) -> torch.Tensor:
         """Run one LEAPP inference step from the matching structured policy inputs."""
         inputs = self._gather_inputs(obs)
@@ -1155,9 +1464,13 @@ class LeappDisplayportPolicy:
         abs_key = f"{self.node_name}/arm_action"
         if abs_key not in self.last_outputs:
             # Fall back to the first tensor that looks like an arm command.
-            candidates = [k for k in self.last_outputs if k.endswith("/arm_action") or "action" in k.split("/")[-1]]
+            candidates = [
+                k for k in self.last_outputs
+                if k.endswith("/arm_action") or "action" in k.split("/")[-1]
+            ]
             if not candidates:
-                raise KeyError(f"LEAPP outputs missing arm_action. Keys: {list(self.last_outputs.keys())}")
+                raise KeyError(
+                    f"LEAPP outputs missing arm_action. Keys: {list(self.last_outputs.keys())}")
             abs_key = candidates[0]
 
         output = self.last_outputs[abs_key]
@@ -1166,18 +1479,22 @@ class LeappDisplayportPolicy:
             if deploy_action.ndim == 1:
                 deploy_action = deploy_action.unsqueeze(0)
             if deploy_action.shape[-1] != 6:
-                raise ValueError(f"Task-space LEAPP arm_action must have 6 values; got {tuple(deploy_action.shape)}.")
+                raise ValueError(
+                    f"Task-space LEAPP arm_action must have 6 values; got "
+                    f"{tuple(deploy_action.shape)}."
+                )
             if deploy_action.shape[0] == 1 and self.base.num_envs > 1:
                 deploy_action = deploy_action.expand(self.base.num_envs, -1)
             elif deploy_action.shape[0] != self.base.num_envs:
                 raise ValueError(
-                    f"Task-space LEAPP batch {deploy_action.shape[0]} does not match {self.base.num_envs} environments."
+                    f"Task-space LEAPP batch {deploy_action.shape[0]} does not match "
+                    f"{self.base.num_envs} environments."
                 )
             scale = task_space_action_scale(self.base.cfg, self.base.device, deploy_action.dtype)
             raw_action = recover_task_space_policy_action(deploy_action, scale, self.clip_actions)
-            actions = torch.zeros(
-                (self.base.num_envs, self.env.num_actions), device=self.base.device, dtype=torch.float32
-            )
+            actions = torch.zeros((self.base.num_envs, self.env.num_actions),
+                                  device=self.base.device,
+                                  dtype=torch.float32)
             actions[:, :6] = raw_action
             self.last_deploy_action = _as_numpy_1d(deploy_action[0])
             self.last_absolute_targets = None
@@ -1256,12 +1573,13 @@ def place_plug_at_grasp_pose(
     eef_idx = eef_indices[0]
 
     num_reset_envs = len(env_ids)
-    grasp_offset_tensor = (
-        torch.tensor(grasp_offset, device=env.device, dtype=torch.float32).unsqueeze(0).repeat(num_reset_envs, 1)
-    )
-    grasp_rot_offset_tensor = (
-        torch.tensor(grasp_rot_offset, device=env.device, dtype=torch.float32).unsqueeze(0).repeat(num_reset_envs, 1)
-    )
+    grasp_offset_tensor = (torch.tensor(grasp_offset, device=env.device,
+                                        dtype=torch.float32).unsqueeze(0).repeat(
+                                            num_reset_envs, 1))
+    grasp_rot_offset_tensor = (torch.tensor(grasp_rot_offset,
+                                            device=env.device,
+                                            dtype=torch.float32).unsqueeze(0).repeat(
+                                                num_reset_envs, 1))
 
     achieved_hand_pos = wp.to_torch(robot.data.body_pos_w)[env_ids, eef_idx].clone()
     achieved_hand_quat = wp.to_torch(robot.data.body_quat_w)[env_ids, eef_idx].clone()
@@ -1282,13 +1600,13 @@ def place_plug_at_grasp_pose(
     joint_pos = wp.to_torch(robot.data.joint_pos)[env_ids].clone()
     joint_vel = torch.zeros_like(joint_pos)
 
-    gripper_joint_setter_func(joint_pos, list(range(num_reset_envs)), finger_joints, hand_hold_width, joint_name_to_idx)
+    gripper_joint_setter_func(joint_pos, list(range(num_reset_envs)), finger_joints,
+                              hand_hold_width, joint_name_to_idx)
     robot.write_joint_position_to_sim_index(position=joint_pos, env_ids=env_ids)
     robot.write_joint_velocity_to_sim_index(velocity=joint_vel, env_ids=env_ids)
 
-    gripper_joint_setter_func(
-        joint_pos, list(range(num_reset_envs)), finger_joints, hand_close_width, joint_name_to_idx
-    )
+    gripper_joint_setter_func(joint_pos, list(range(num_reset_envs)), finger_joints,
+                              hand_close_width, joint_name_to_idx)
     robot.set_joint_position_target_index(target=joint_pos, joint_ids=all_joints, env_ids=env_ids)
 
 
@@ -1339,7 +1657,8 @@ def _flatten_policy_obs(obs) -> np.ndarray | None:
         try:
             items = dict(obs.items())
             if "policy" in items:
-                arr = _as_numpy_1d(items["policy"][0] if hasattr(items["policy"], "__getitem__") else items["policy"])
+                arr = _as_numpy_1d(items["policy"][0] if hasattr(items["policy"], "__getitem__"
+                                                                 ) else items["policy"])
                 if arr is not None:
                     return arr
             parts = []
@@ -1409,10 +1728,11 @@ class InferenceLogger:
         self._t0 = time.time()
         self._action_scale = _action_scale(env)
         action_cfg = self.base.cfg.actions.arm_action
-        self._is_task_space = hasattr(action_cfg, "position_scale") and hasattr(action_cfg, "orientation_scale")
-        self._task_space_action_scale = (
-            _as_numpy_1d(task_space_action_scale(self.base.cfg, "cpu", torch.float64)) if self._is_task_space else None
-        )
+        self._is_task_space = hasattr(action_cfg, "position_scale") and hasattr(
+            action_cfg, "orientation_scale")
+        self._task_space_action_scale = (_as_numpy_1d(
+            task_space_action_scale(self.base.cfg, "cpu", torch.float64))
+                                         if self._is_task_space else None)
         # Arm joint positions sampled when the policy ran, carried from
         # begin_step() to end_step() to decode action_* the way real does.
         self._arm_q_at_policy: np.ndarray | None = None
@@ -1466,7 +1786,8 @@ class InferenceLogger:
                 row[f"rnn_out_{i}"] = float(val)
 
         robot = scene["robot"]
-        joint_names = list(_get_attr(robot.data, "joint_names") or _get_attr(robot, "joint_names") or [])
+        joint_names = list(
+            _get_attr(robot.data, "joint_names") or _get_attr(robot, "joint_names") or [])
 
         joint_pos = _as_numpy_1d(_to_torch(robot.data.joint_pos)[0])
         self._arm_q_at_policy = None if joint_pos is None else joint_pos.copy()
@@ -1481,7 +1802,8 @@ class InferenceLogger:
         if goal_pos is not None and len(goal_pos) >= 3:
             row["goal_px"], row["goal_py"], row["goal_pz"] = map(float, goal_pos[:3])
         if goal_quat is not None and len(goal_quat) >= 4:
-            row["goal_qx"], row["goal_qy"], row["goal_qz"], row["goal_qw"] = map(float, goal_quat[:4])
+            row["goal_qx"], row["goal_qy"], row["goal_qz"], row["goal_qw"] = map(
+                float, goal_quat[:4])
 
         eef_name = getattr(self.base.cfg, "end_effector_body_name", "flange")
         body_names = _get_attr(robot.data, "body_names") or _get_attr(robot, "body_names")
@@ -1493,7 +1815,8 @@ class InferenceLogger:
                 # Reference naming: eef_p{x,y,z} / eef_q{x,y,z,w}
                 row["eef_px"], row["eef_py"], row["eef_pz"] = map(float, eef_pos.tolist())
             if eef_quat is not None:
-                row["eef_qx"], row["eef_qy"], row["eef_qz"], row["eef_qw"] = map(float, eef_quat.tolist())
+                row["eef_qx"], row["eef_qy"], row["eef_qz"], row["eef_qw"] = map(
+                    float, eef_quat.tolist())
 
         # Extra sim-only ground truth (not in real policy_io.csv, but useful for debugging).
         for asset_key, candidates in (("plug", ["dp_plug"]), ("socket", ["dp_socket"])):
@@ -1503,9 +1826,8 @@ class InferenceLogger:
             pos = _as_numpy_1d(_to_torch(asset.data.root_pos_w)[0])
             quat = _as_numpy_1d(_to_torch(asset.data.root_quat_w)[0])
             if pos is not None:
-                row[f"{asset_key}_pos_x"], row[f"{asset_key}_pos_y"], row[f"{asset_key}_pos_z"] = map(
-                    float, pos.tolist()
-                )
+                row[f"{asset_key}_pos_x"], row[f"{asset_key}_pos_y"], row[
+                    f"{asset_key}_pos_z"] = map(float, pos.tolist())
             if quat is not None:
                 (
                     row[f"{asset_key}_quat_x"],
@@ -1536,11 +1858,11 @@ class InferenceLogger:
             origins = _as_numpy_1d(_to_torch(scene.env_origins)[0])
             for name, cfg in zip(names, cfgs):
                 if name not in (
-                    "socket_pos",
-                    "socket_kp_pos",
-                    "socket_quat",
-                    "socket_rot_6d",
-                    "socket_kp_rot_6d",
+                        "socket_pos",
+                        "socket_kp_pos",
+                        "socket_quat",
+                        "socket_rot_6d",
+                        "socket_kp_rot_6d",
                 ):
                     continue
                 out = cfg.func(self.base, **cfg.params)
@@ -1582,7 +1904,10 @@ class InferenceLogger:
         else:
             print(f"[obs] {_fmt(_to_torch(obs))}")
 
-        print(f"[actions] {_fmt(_to_torch(actions)[0] if hasattr(actions, '__getitem__') else actions)}")
+        print(
+            f"[actions] "
+            f"{_fmt(_to_torch(actions)[0] if hasattr(actions, '__getitem__') else actions)}"
+        )
 
         robot = scene["robot"]
         joint_pos = _to_torch(robot.data.joint_pos)[0]
@@ -1614,19 +1939,15 @@ class InferenceLogger:
         body_names = _get_attr(robot.data, "body_names") or _get_attr(robot, "body_names")
         if body_names is not None and eef_name in list(body_names):
             idx = list(body_names).index(eef_name)
-            print(
-                f"[eef '{eef_name}'] pos={_fmt(_to_torch(robot.data.body_pos_w)[0, idx])} "
-                f"quat(xyzw)={_fmt(_to_torch(robot.data.body_quat_w)[0, idx])}"
-            )
+            print(f"[eef '{eef_name}'] pos={_fmt(_to_torch(robot.data.body_pos_w)[0, idx])} "
+                  f"quat(xyzw)={_fmt(_to_torch(robot.data.body_quat_w)[0, idx])}")
 
         for candidates in (["dp_plug"], ["dp_socket"]):
             asset, name = _get_asset(scene, candidates)
             if asset is None:
                 continue
-            print(
-                f"[{name}] pos={_fmt(_to_torch(asset.data.root_pos_w)[0])} "
-                f"quat(xyzw)={_fmt(_to_torch(asset.data.root_quat_w)[0])}"
-            )
+            print(f"[{name}] pos={_fmt(_to_torch(asset.data.root_pos_w)[0])} "
+                  f"quat(xyzw)={_fmt(_to_torch(asset.data.root_quat_w)[0])}")
 
         if success_info is not None:
             print(SuccessTracker.format(success_info))
@@ -1661,7 +1982,8 @@ class InferenceLogger:
             return
         robot = self.base.scene["robot"]
         num_arm = int(getattr(self.base.cfg, "num_arm_joints", 7) or 7)
-        joint_names = list(_get_attr(robot.data, "joint_names") or _get_attr(robot, "joint_names") or [])
+        joint_names = list(
+            _get_attr(robot.data, "joint_names") or _get_attr(robot, "joint_names") or [])
         try:
             # Absolute joint command produced by applying the logged action.
             target = _as_numpy_1d(_to_torch(robot.data.joint_pos_target)[0])
@@ -1795,7 +2117,8 @@ def _disable_randomization(env_cfg):
             "z": [0.0, 0.0],
         }
     # Disable observation corruption for deterministic inference.
-    if hasattr(env_cfg.observations, "policy") and hasattr(env_cfg.observations.policy, "enable_corruption"):
+    if hasattr(env_cfg.observations, "policy") and hasattr(env_cfg.observations.policy,
+                                                           "enable_corruption"):
         env_cfg.observations.policy.enable_corruption = False
 
 
@@ -1813,9 +2136,9 @@ def _apply_robot_joint_override(env_cfg):
     grasp_event = getattr(env_cfg.events, "set_robot_to_grasp_pose", None)
     if grasp_event is None:
         print(
-            "[WARNING] No 'set_robot_to_grasp_pose' event found; plug will spawn at its configured pose, "
-            "not necessarily in the gripper."
-        )
+            "[WARNING] No 'set_robot_to_grasp_pose' event found; plug will spawn at its "
+            "configured pose, "
+            "not necessarily in the gripper.")
         return
 
     params = grasp_event.params
@@ -1842,28 +2165,29 @@ def _apply_socket_override(env_cfg) -> dict[str, Any]:
     """Apply actual socket/plug init poses. Returns resolved pose metadata for logging."""
     socket_cfg = env_cfg.scene.dp_socket
     plug_cfg = env_cfg.scene.dp_plug
-    socket_rot = tuple(args_cli.socket_rot) if args_cli.socket_rot is not None else tuple(socket_cfg.init_state.rot)
+    socket_rot = tuple(args_cli.socket_rot) if args_cli.socket_rot is not None else tuple(
+        socket_cfg.init_state.rot)
     meta: dict[str, Any] = {"socket_rot_xyzw": list(socket_rot)}
 
     if args_cli.socket_pos is not None:
         geometry_pos = tuple(args_cli.socket_pos)
         socket_root = compute_socket_root(geometry_pos, socket_rot)
-        plug_root, plug_rot = compute_plug_pose(geometry_pos, socket_rot, z_clearance=args_cli.z_clearance)
+        plug_root, plug_rot = compute_plug_pose(geometry_pos,
+                                                socket_rot,
+                                                z_clearance=args_cli.z_clearance)
         socket_cfg.init_state.pos = socket_root
         socket_cfg.init_state.rot = socket_rot
         plug_cfg.init_state.pos = plug_root
         plug_cfg.init_state.rot = plug_rot
         if hasattr(env_cfg, "fixed_asset_init_pos_center"):
             env_cfg.fixed_asset_init_pos_center = list(geometry_pos)
-        meta.update(
-            {
-                "socket_geometry_pos": list(geometry_pos),
-                "socket_root_pos": list(socket_root),
-                "plug_root_pos": list(plug_root),
-                "plug_rot_xyzw": list(plug_rot),
-                "z_clearance": args_cli.z_clearance,
-            }
-        )
+        meta.update({
+            "socket_geometry_pos": list(geometry_pos),
+            "socket_root_pos": list(socket_root),
+            "plug_root_pos": list(plug_root),
+            "plug_rot_xyzw": list(plug_rot),
+            "z_clearance": args_cli.z_clearance,
+        })
         print("[INFO] Actual socket override applied:")
         print(f"       socket geometry pos = {tuple(round(v, 4) for v in geometry_pos)}")
         print(f"       socket root pos     = {tuple(round(v, 4) for v in socket_root)}")
@@ -1871,7 +2195,10 @@ def _apply_socket_override(env_cfg) -> dict[str, Any]:
         print(f"       plug root pos       = {tuple(round(v, 4) for v in plug_root)}")
     else:
         meta["socket_geometry_pos"] = "env_default"
-        print("[INFO] No --socket_pos given; using env-configured socket pose (randomization disabled).")
+        print(
+            "[INFO] No --socket_pos given; using env-configured socket pose (randomization "
+            "disabled)."
+        )
 
     _disable_randomization(env_cfg)
     return meta
@@ -1895,15 +2222,22 @@ def _apply_observed_socket_override(env) -> dict[str, Any]:
         elif name == "socket_quat" and args_cli.observed_socket_rot is not None:
             term_cfg.func = _FixedObservedSocketQuat(base, args_cli.observed_socket_rot)
             meta["observed_socket_rot"] = list(args_cli.observed_socket_rot)
-        elif name in ("socket_rot_6d", "socket_kp_rot_6d") and args_cli.observed_socket_rot is not None:
+        elif name in ("socket_rot_6d",
+                      "socket_kp_rot_6d") and args_cli.observed_socket_rot is not None:
             term_cfg.func = _FixedObservedSocketRot6D(base, args_cli.observed_socket_rot)
             meta["observed_socket_rot"] = list(args_cli.observed_socket_rot)
 
     print("[INFO] Observed (policy-visible) socket pose override applied:")
     if args_cli.observed_socket_pos is not None:
-        print(f"       observed socket geometry pos = {tuple(round(v, 4) for v in args_cli.observed_socket_pos)}")
+        print(
+            f"       observed socket geometry pos = "
+            f"{tuple(round(v, 4) for v in args_cli.observed_socket_pos)}"
+        )
     if args_cli.observed_socket_rot is not None:
-        print(f"       observed socket rot (xyzw)   = {tuple(round(v, 4) for v in args_cli.observed_socket_rot)}")
+        print(
+            f"       observed socket rot (xyzw)   = "
+            f"{tuple(round(v, 4) for v in args_cli.observed_socket_rot)}"
+        )
     return meta
 
 
@@ -1955,10 +2289,10 @@ def _write_run_metadata(
     print(f"[INFO] Wrote run config to {path}")
 
 
-@hydra_task_config(args_cli.task, args_cli.agent)
+@hydra_task_config(args_cli.task, args_cli.agent, play_mode=not args_cli.train_env_cfg)
 def main(  # noqa: C901
-    env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlBaseRunnerCfg
-):
+        env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
+        agent_cfg: RslRlBaseRunnerCfg):
     """Run DisplayPort insertion inference with controllable poses and logging."""
     with launch_simulation(env_cfg, args_cli):
         task_name = args_cli.task.split(":")[-1]
@@ -1972,15 +2306,20 @@ def main(  # noqa: C901
         if init_obs_mode and replay_mode:
             raise ValueError("Use only one of --init_obs_csv and --replay_csv.")
         if leapp_mode and (args_cli.checkpoint or args_cli.use_pretrained_checkpoint):
-            print("[WARNING] --leapp_model set; ignoring --checkpoint / --use_pretrained_checkpoint.")
+            print(
+                "[WARNING] --leapp_model set; ignoring --checkpoint / --use_pretrained_checkpoint."
+            )
         if replay_mode and (args_cli.checkpoint or args_cli.use_pretrained_checkpoint):
             print("[WARNING] --replay_csv set; checkpoint will not be used for actions.")
-        if init_obs_mode and not leapp_mode and not (args_cli.checkpoint or args_cli.use_pretrained_checkpoint):
+        if init_obs_mode and not leapp_mode and not (args_cli.checkpoint
+                                                     or args_cli.use_pretrained_checkpoint):
             # Still allow hydra default checkpoint resolution below; just note the feature.
             print("[INFO] --init_obs_csv set: first policy step will use CSV obs_* verbatim.")
 
         agent_cfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
-        env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
+        env_cfg.scene.num_envs = (
+            args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
+        )
         agent_cfg = handle_deprecated_rsl_rl_cfg(agent_cfg, installed_version)
         env_cfg.seed = agent_cfg.seed
         env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
@@ -1988,17 +2327,30 @@ def main(  # noqa: C901
         replay_traj: ReplayTrajectory | None = None
         init_obs_seed: InitPolicyObs | None = None
         num_arm = int(getattr(env_cfg, "num_arm_joints", 7) or 7)
+        task_space = _is_task_space_action_cfg(env_cfg)
         if replay_mode:
-            replay_traj = load_replay_trajectory(args_cli.replay_csv, num_arm_joints=num_arm)
+            replay_scale = None
+            if task_space:
+                replay_scale = _as_numpy_1d(
+                    task_space_action_scale(env_cfg, "cpu", torch.float64)
+                )
+            replay_traj = load_replay_trajectory(
+                args_cli.replay_csv,
+                num_arm_joints=num_arm,
+                task_space_scale=replay_scale,
+                clip_actions=agent_cfg.clip_actions,
+            )
             _seed_cli_from_replay(replay_traj)
             # Avoid mid-replay resets wiping the open-loop track.
             if hasattr(env_cfg, "episode_length_s"):
-                env_cfg.episode_length_s = max(float(env_cfg.episode_length_s), replay_traj.num_steps * 10.0)
+                env_cfg.episode_length_s = max(float(env_cfg.episode_length_s),
+                                               replay_traj.num_steps * 10.0)
         if init_obs_mode:
             init_obs_seed = load_init_policy_obs(
                 args_cli.init_obs_csv,
                 step=int(args_cli.init_obs_step),
                 num_arm_joints=num_arm,
+                task_space=task_space,
             )
             _seed_cli_from_init_obs(init_obs_seed)
 
@@ -2023,7 +2375,8 @@ def main(  # noqa: C901
             resume_path = retrieve_file_path(args_cli.checkpoint)
         elif not replay_mode:
             print(f"[INFO] Loading experiment from directory: {log_root_path}")
-            resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
+            resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run,
+                                              agent_cfg.load_checkpoint)
         else:
             print("[INFO] Replay mode: no checkpoint required (policy will not be loaded).")
 
@@ -2057,14 +2410,22 @@ def main(  # noqa: C901
         leapp_policy: LeappDisplayportPolicy | None = None
         if leapp_mode:
             assert leapp_yaml is not None
-            leapp_policy = LeappDisplayportPolicy(env, leapp_yaml, clip_actions=agent_cfg.clip_actions)
+            leapp_policy = LeappDisplayportPolicy(env,
+                                                  leapp_yaml,
+                                                  clip_actions=agent_cfg.clip_actions)
             policy = leapp_policy
         elif not replay_mode:
             print(f"[INFO]: Loading model checkpoint from: {resume_path}")
             if agent_cfg.class_name == "OnPolicyRunner":
-                runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
+                runner = OnPolicyRunner(env,
+                                        agent_cfg.to_dict(),
+                                        log_dir=None,
+                                        device=agent_cfg.device)
             elif agent_cfg.class_name == "DistillationRunner":
-                runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
+                runner = DistillationRunner(env,
+                                            agent_cfg.to_dict(),
+                                            log_dir=None,
+                                            device=agent_cfg.device)
             else:
                 raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
             runner.load(resume_path)
@@ -2076,9 +2437,33 @@ def main(  # noqa: C901
                     policy_nn = runner.alg.actor_critic
         else:
             assert replay_traj is not None
+            if replay_traj.action_space == "task_space":
+                print(
+                    f"[INFO] Open-loop replay of {replay_traj.num_steps} task-space actions "
+                    f"(source={replay_traj.source})."
+                )
+            else:
+                print(
+                    f"[INFO] Open-loop replay of {replay_traj.num_steps} absolute joint "
+                    f"targets (source={replay_traj.source}, "
+                    f"action_scale={_action_scale(env):.4f})."
+                )
+
+        if init_obs_seed is not None and init_obs_seed.rnn_in is not None:
+            if leapp_policy is not None:
+                leapp_policy.restore_packed_rnn_state(init_obs_seed.rnn_in)
+                backend = "LEAPP"
+            else:
+                state_policy = policy
+                if _find_rsl_recurrent_module(state_policy) is None and policy_nn is not None:
+                    state_policy = policy_nn
+                _restore_rsl_rnn_state(
+                    state_policy, init_obs_seed.rnn_in, num_envs=env.unwrapped.num_envs
+                )
+                backend = "RSL-RL"
             print(
-                f"[INFO] Open-loop replay of {replay_traj.num_steps} absolute joint targets "
-                f"(source={replay_traj.source}, action_scale={_action_scale(env):.4f})."
+                f"[INFO] Restored {backend} recurrent state from CSV rnn_in_* "
+                f"(dim={init_obs_seed.rnn_in.size})."
             )
 
         dt = env.unwrapped.step_dt
@@ -2099,13 +2484,10 @@ def main(  # noqa: C901
                 if sim_obs.size != pending_init_obs.obs.size:
                     raise ValueError(
                         f"--init_obs_csv obs dim {pending_init_obs.obs.size} != live sim obs dim "
-                        f"{sim_obs.size}. Record the CSV with the same task observation layout."
-                    )
+                        f"{sim_obs.size}. Record the CSV with the same task observation layout.")
                 delta = float(np.max(np.abs(sim_obs - pending_init_obs.obs)))
-                print(
-                    f"[INFO] Injecting CSV init obs for first policy step "
-                    f"(max |csv - sim_obs| before inject = {delta:.6g})."
-                )
+                print(f"[INFO] Injecting CSV init obs for first policy step "
+                      f"(max |csv - sim_obs| before inject = {delta:.6g}).")
             else:
                 print("[INFO] Injecting CSV init obs for first policy step.")
             obs = _replace_policy_obs_vector(
@@ -2127,13 +2509,21 @@ def main(  # noqa: C901
                     if replay_mode:
                         assert replay_traj is not None
                         if step_count >= replay_traj.num_steps:
-                            print(f"[INFO] Reached end of replay CSV ({replay_traj.num_steps} steps).")
+                            print(
+                                f"[INFO] Reached end of replay CSV ({replay_traj.num_steps} "
+                                f"steps)."
+                            )
                             break
-                        actions = _absolute_targets_to_relative_actions(
-                            env,
-                            replay_traj.targets[step_count],
-                            clip_actions=agent_cfg.clip_actions,
-                        )
+                        if replay_traj.action_space == "task_space":
+                            actions = _task_space_replay_actions(
+                                env, replay_traj.targets[step_count]
+                            )
+                        else:
+                            actions = _absolute_targets_to_relative_actions(
+                                env,
+                                replay_traj.targets[step_count],
+                                clip_actions=agent_cfg.clip_actions,
+                            )
                     elif leapp_policy is not None:
                         actions = leapp_policy(obs)
                         rnn_in = leapp_policy.last_rnn_in
@@ -2157,22 +2547,26 @@ def main(  # noqa: C901
 
                     if not replay_mode and not lstm_logged_once:
                         if rnn_out is not None:
-                            print(
-                                f"[INFO] Logging recurrent state as rnn_in_*/rnn_out_* "
-                                f"(dim={int(np.asarray(rnn_out).size)})."
-                            )
+                            print(f"[INFO] Logging recurrent state as rnn_in_*/rnn_out_* "
+                                  f"(dim={int(np.asarray(rnn_out).size)}).")
                         else:
-                            print(
-                                "[WARNING] Policy has no accessible LSTM hidden state; "
-                                "rnn_in_*/rnn_out_* will not be written."
-                            )
+                            print("[WARNING] Policy has no accessible LSTM hidden state; "
+                                  "rnn_in_*/rnn_out_* will not be written.")
                         lstm_logged_once = True
 
                     # Snapshot the state the policy/replay actually saw, before the action lands.
-                    pending_row = logger.begin_step(
-                        obs, actions, step_count, episode_count, rnn_in=rnn_in, rnn_out=rnn_out
-                    )
-                    logger.print_step(obs, actions, step_count, None, rnn_in=rnn_in, rnn_out=rnn_out)
+                    pending_row = logger.begin_step(obs,
+                                                    actions,
+                                                    step_count,
+                                                    episode_count,
+                                                    rnn_in=rnn_in,
+                                                    rnn_out=rnn_out)
+                    logger.print_step(obs,
+                                      actions,
+                                      step_count,
+                                      None,
+                                      rnn_in=rnn_in,
+                                      rnn_out=rnn_out)
 
                     obs, _, dones, _ = env.step(actions)
                     success_info = success_tracker.update(dones)
@@ -2194,8 +2588,7 @@ def main(  # noqa: C901
                     elif bool(dones_b.any()):
                         print(
                             "[WARNING] Env reset during open-loop replay; subsequent CSV targets "
-                            "no longer match the robot state. Stopping."
-                        )
+                            "no longer match the robot state. Stopping.")
                         break
 
                 if args_cli.max_steps is not None and step_count >= args_cli.max_steps:
@@ -2213,11 +2606,9 @@ def main(  # noqa: C901
         finally:
             logger.flush()
             if success_tracker.enabled and success_tracker.num_episodes > 0:
-                print(
-                    f"[INFO] Final episode success rate: "
-                    f"{success_tracker.num_success_episodes / success_tracker.num_episodes:.3f} "
-                    f"({success_tracker.num_success_episodes}/{success_tracker.num_episodes})"
-                )
+                print(f"[INFO] Final episode success rate: "
+                      f"{success_tracker.num_success_episodes / success_tracker.num_episodes:.3f} "
+                      f"({success_tracker.num_success_episodes}/{success_tracker.num_episodes})")
             env.close()
 
 

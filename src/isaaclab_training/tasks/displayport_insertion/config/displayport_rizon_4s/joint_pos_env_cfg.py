@@ -1,14 +1,29 @@
-# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+# Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Copyright (c) 2022-2026, The Isaac Lab Project Developers
+# (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-
 """Joint-space DisplayPort insertion environment for Flexiv Rizon 4S + Grav gripper."""
 
 import math
 import warnings
-
-import torch
 
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg, RigidObjectCfg
@@ -16,22 +31,15 @@ from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.utils.configclass import configclass
-from isaaclab_physx.sim.schemas import (
-    PhysxArticulationRootPropertiesCfg,
-    PhysxCollisionPropertiesCfg,
-    PhysxRigidBodyPropertiesCfg,
-)
-
+from isaaclab_assets import FLEXIV_RIZON4S_GRAV_GRIPPER_CFG
+from isaaclab_physx.sim.schemas import (PhysxArticulationRootPropertiesCfg,
+                                        PhysxCollisionPropertiesCfg, PhysxRigidBodyPropertiesCfg)
 import isaaclab_training.mdp as mdp
 import isaaclab_training.mdp.terminations as cable_terminations
 from isaaclab_training.tasks.displayport_insertion.displayport_insertion_env_cfg import (
-    PLUG_GOAL_ROT,
-    PLUG_INSERTION_OFFSET,
-    SOCKET_INSERTION_OFFSET,
-    DisplayportInsertionEnvCfg,
-    compute_plug_pose,
-    compute_socket_root,
-)
+    compute_plug_pose, compute_socket_root, DisplayportInsertionEnvCfg, PLUG_GOAL_ROT,
+    PLUG_INSERTION_OFFSET, SOCKET_INSERTION_OFFSET)
+import torch
 
 # DisplayPort insertion station layout in the Flexiv workspace.
 # _GEOMETRY_POS is the desired insertion (mate) point; _SOCKET_ROT orients the socket opening up.
@@ -52,13 +60,10 @@ _INSERTION_LENGTH = 0.011
 ##
 # Pre-defined configs
 ##
-from isaaclab_assets import FLEXIV_RIZON4S_GRAV_GRIPPER_CFG  # isort: skip
-
 
 ##
 # Gripper-specific helper functions
 ##
-
 
 _GRAV_GRIPPER_MIMIC_GEARING = {
     "finger_joint": 1.0,
@@ -87,7 +92,8 @@ def set_finger_joint_pos_grav(
         joint_name_to_idx: Mapping from joint names to simulation joint indices.
     """
     if len(finger_joints) < len(_GRAV_GRIPPER_MIMIC_GEARING):
-        raise ValueError(f"Grav gripper requires at least 6 finger joints, got {len(finger_joints)}")
+        raise ValueError(
+            f"Grav gripper requires at least 6 finger joints, got {len(finger_joints)}")
     if joint_name_to_idx is None:
         warnings.warn(
             "Calling set_finger_joint_pos_grav without joint_name_to_idx is deprecated; "
@@ -205,7 +211,11 @@ class EventCfg:
         mode="reset",
         params={
             "robot_asset_cfg": SceneEntityCfg("robot"),
-            "pos_randomization_range": {"x": [-0.0, 0.0], "y": [-0.0, 0.0], "z": [-0.0, 0.0]},
+            "pos_randomization_range": {
+                "x": [-0.0, 0.0],
+                "y": [-0.0, 0.0],
+                "z": [-0.0, 0.0]
+            },
             "target_object_name": "dp_plug",
             "grasp_offset": [0.0, 0.0, 0.0],
         },
@@ -257,7 +267,8 @@ class Rizon4sGravDisplayportInsertionEnvCfg(DisplayportInsertionEnvCfg):
         super().__post_init__()
 
         # Match exponential keypoint reward weight to the linear term (1:1 weighting)
-        self.rewards.plug_socket_keypoint_tracking_exp.weight = abs(self.rewards.plug_socket_keypoint_tracking.weight)
+        self.rewards.plug_socket_keypoint_tracking_exp.weight = abs(
+            self.rewards.plug_socket_keypoint_tracking.weight)
 
         # Robot-specific parameters for Flexiv Rizon 4s with Grav gripper
         self.end_effector_body_name = "flange"  # End effector body name for IK
@@ -266,7 +277,8 @@ class Rizon4sGravDisplayportInsertionEnvCfg(DisplayportInsertionEnvCfg):
         self.grasp_offset = [0.0025, 0.0, -0.1875]
         # Rotation offset for grasp pose (quaternion [x, y, z, w])
         self.grasp_rot_offset = [0.0, 0.0, 0.0, 1.0]
-        self.gripper_joint_setter_func = set_finger_joint_pos_grav  # Grav gripper joint setter function
+        # Grav gripper joint setter function
+        self.gripper_joint_setter_func = set_finger_joint_pos_grav
 
         # Plug orientation termination thresholds (in degrees)
         self.plug_orientation_roll_threshold_deg = 15.0  # Maximum allowed roll deviation
@@ -300,14 +312,11 @@ class Rizon4sGravDisplayportInsertionEnvCfg(DisplayportInsertionEnvCfg):
 
         # Update termination thresholds from config
         self.terminations.plug_orientation_exceeded.params["roll_threshold_deg"] = (
-            self.plug_orientation_roll_threshold_deg
-        )
+            self.plug_orientation_roll_threshold_deg)
         self.terminations.plug_orientation_exceeded.params["pitch_threshold_deg"] = (
-            self.plug_orientation_pitch_threshold_deg
-        )
+            self.plug_orientation_pitch_threshold_deg)
         self.terminations.plug_orientation_exceeded.params["yaw_threshold_deg"] = (
-            self.plug_orientation_yaw_threshold_deg
-        )
+            self.plug_orientation_yaw_threshold_deg)
 
         # Action configuration for Rizon 4s arm
         self.joint_action_scale = 0.025
@@ -392,31 +401,34 @@ class Rizon4sGravDisplayportInsertionEnvCfg(DisplayportInsertionEnvCfg):
         self.hand_close_width = -0.155
 
         # Populate event term parameters
-        self.events.set_robot_to_grasp_pose.params["end_effector_body_name"] = self.end_effector_body_name
+        self.events.set_robot_to_grasp_pose.params[
+            "end_effector_body_name"] = self.end_effector_body_name
         self.events.set_robot_to_grasp_pose.params["num_arm_joints"] = self.num_arm_joints
         self.events.set_robot_to_grasp_pose.params["grasp_rot_offset"] = self.grasp_rot_offset
         self.events.set_robot_to_grasp_pose.params["grasp_offset"] = self.grasp_offset
-        self.events.set_robot_to_grasp_pose.params["gripper_joint_setter_func"] = self.gripper_joint_setter_func
+        self.events.set_robot_to_grasp_pose.params[
+            "gripper_joint_setter_func"] = self.gripper_joint_setter_func
         self.events.set_robot_to_grasp_pose.params["max_iterations"] = 150
 
         # Populate termination term parameters
-        self.terminations.plug_dropped.params["end_effector_body_name"] = self.end_effector_body_name
+        self.terminations.plug_dropped.params[
+            "end_effector_body_name"] = self.end_effector_body_name
         self.terminations.plug_dropped.params["grasp_offset"] = self.grasp_offset
         self.terminations.plug_dropped.params["grasp_rot_offset"] = self.grasp_rot_offset
 
-        self.terminations.plug_orientation_exceeded.params["end_effector_body_name"] = self.end_effector_body_name
-        self.terminations.plug_orientation_exceeded.params["grasp_rot_offset"] = self.grasp_rot_offset
+        self.terminations.plug_orientation_exceeded.params[
+            "end_effector_body_name"] = self.end_effector_body_name
+        self.terminations.plug_orientation_exceeded.params[
+            "grasp_rot_offset"] = self.grasp_rot_offset
 
+    def play_mode(self):
+        """Apply playback overrides on top of the shared Isaac Lab defaults.
 
-@configclass
-class Rizon4sGravDisplayportInsertionEnvCfg_PLAY(Rizon4sGravDisplayportInsertionEnvCfg):
-    """Play configuration for Flexiv Rizon 4s DisplayPort insertion."""
-
-    def __post_init__(self):
-        super().__post_init__()
-        self.scene.num_envs = 50
+        ``super().play_mode()`` caps ``num_envs`` and disables observation corruption; only the
+        wider env spacing is specific to this task.
+        """
+        super().play_mode()
         self.scene.env_spacing = 2.5
-        self.observations.policy.enable_corruption = False
 
 
 @configclass
@@ -430,14 +442,3 @@ class Rizon4sGravDisplayportInsertionNoJointVelEnvCfg(Rizon4sGravDisplayportInse
         super().__post_init__()
         # Remove joint velocity from the actor observation group
         self.observations.policy.joint_vel = None
-
-
-@configclass
-class Rizon4sGravDisplayportInsertionNoJointVelEnvCfg_PLAY(Rizon4sGravDisplayportInsertionNoJointVelEnvCfg):
-    """Play configuration for the no-joint-velocity joint-space variant."""
-
-    def __post_init__(self):
-        super().__post_init__()
-        self.scene.num_envs = 50
-        self.scene.env_spacing = 2.5
-        self.observations.policy.enable_corruption = False

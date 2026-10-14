@@ -1,8 +1,8 @@
-# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# Copyright (c) 2022-2026, The Isaac Lab Project Developers
+# (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-
 """Tests for DisplayPort task-space LEAPP observation contracts."""
 
 import importlib
@@ -38,7 +38,8 @@ def test_task_space_input_spec_uses_newton_observation_order():
     export_module = _load_export_module()
     obs_order = ["socket_pos", "tool_pos", "tool_rot_6d", "socket_rot_6d"]
 
-    resolved = export_module.resolve_task_space_input_spec(SimpleNamespace(task_space_obs_order=obs_order))
+    resolved = export_module.resolve_task_space_input_spec(
+        SimpleNamespace(task_space_obs_order=obs_order))
 
     assert [entry[0] for entry in resolved] == [
         "eef_pos",
@@ -46,7 +47,8 @@ def test_task_space_input_spec_uses_newton_observation_order():
         "socket_kp_pos",
         "socket_kp_rot_6d",
     ]
-    assert [(entry[1].start, entry[1].stop) for entry in resolved] == [(3, 6), (6, 12), (0, 3), (12, 18)]
+    assert [(entry[1].start, entry[1].stop) for entry in resolved] == [(3, 6), (6, 12), (0, 3),
+                                                                       (12, 18)]
     assert [entry[3] for entry in resolved] == [
         "eef_pose_pos",
         "eef_pose_rot6d",
@@ -59,7 +61,8 @@ def test_task_space_input_spec_uses_newton_observation_order():
 def test_task_space_input_terms_map_newton_aliases_to_canonical_ports():
     """Test runtime playback reads Newton aliases for canonical LEAPP inputs."""
     export_module = _load_export_module()
-    env_cfg = SimpleNamespace(task_space_obs_order=["socket_pos", "tool_pos", "tool_rot_6d", "socket_rot_6d"])
+    env_cfg = SimpleNamespace(
+        task_space_obs_order=["socket_pos", "tool_pos", "tool_rot_6d", "socket_rot_6d"])
 
     resolved = export_module.resolve_task_space_input_terms(env_cfg)
 
@@ -102,9 +105,10 @@ def test_task_space_inputs_are_annotated_eef_first_and_rebuilt_in_newton_actor_o
     leapp_module.annotate = SimpleNamespace(input_tensors=_annotate_input)
     trained_actor_obs = torch.arange(18, dtype=torch.float32).reshape(1, 18)
 
-    rebuilt = export_module.split_and_annotate_task_space_obs(
-        "DisplayPortTaskSpace", trained_actor_obs, input_spec=resolved, input_metadata=input_metadata
-    )
+    rebuilt = export_module.split_and_annotate_task_space_obs("DisplayPortTaskSpace",
+                                                              trained_actor_obs,
+                                                              input_spec=resolved,
+                                                              input_metadata=input_metadata)
 
     assert annotation_order == ["eef_pos", "eef_rot_6d", "socket_kp_pos", "socket_kp_rot_6d"]
     torch.testing.assert_close(annotated_values["eef_pos"], trained_actor_obs[:, 3:6])
@@ -135,7 +139,8 @@ def test_task_space_deploy_metadata_distinguishes_newton_frame():
     """Export metadata must make the Newton raw-flange ABI machine-readable."""
     export_module = _load_export_module()
 
-    inputs, action = export_module.resolve_task_space_deploy_metadata(SimpleNamespace(**_newton_deploy_metadata()))
+    inputs, action = export_module.resolve_task_space_deploy_metadata(
+        SimpleNamespace(**_newton_deploy_metadata()))
 
     assert inputs["eef_pos"] == {
         "policy_abi": "displayport_newton_flange_v1",
@@ -161,8 +166,7 @@ def test_task_space_deploy_metadata_rejects_partial_contract():
 
     with pytest.raises(ValueError, match="Incomplete task-space deployment metadata"):
         export_module.resolve_task_space_deploy_metadata(
-            SimpleNamespace(task_space_policy_abi="displayport_newton_flange_v1")
-        )
+            SimpleNamespace(task_space_policy_abi="displayport_newton_flange_v1"))
 
 
 def test_export_task_space_action_preserves_legacy_metadata(monkeypatch):
@@ -223,7 +227,8 @@ def test_task_space_action_export_includes_scale_clip_and_frame(monkeypatch):
         orientation_scale=0.025,
         controller_cfg=SimpleNamespace(target_types=["pose_rel"]),
     )
-    env_cfg = SimpleNamespace(actions=SimpleNamespace(arm_action=action_cfg), **_newton_deploy_metadata())
+    env_cfg = SimpleNamespace(actions=SimpleNamespace(arm_action=action_cfg),
+                              **_newton_deploy_metadata())
     contract = export_module.DisplayPortTaskSpaceContract()
 
     contract.export_action(
@@ -253,8 +258,10 @@ def test_task_space_action_export_includes_scale_clip_and_frame(monkeypatch):
 @pytest.mark.parametrize(
     ("obs_order", "message"),
     [
-        pytest.param(["socket_pos", "unknown", "tool_rot_6d", "socket_rot_6d"], "Unknown", id="unknown"),
-        pytest.param(["socket_pos", "tool_pos", "tool_rot_6d", "tool_rot_6d"], "Duplicate", id="duplicate"),
+        pytest.param(
+            ["socket_pos", "unknown", "tool_rot_6d", "socket_rot_6d"], "Unknown", id="unknown"),
+        pytest.param(
+            ["socket_pos", "tool_pos", "tool_rot_6d", "tool_rot_6d"], "Duplicate", id="duplicate"),
         pytest.param(["socket_pos", "tool_pos"], "exactly 18", id="wrong-width"),
         pytest.param(
             ["socket_pos", "socket_kp_pos", "tool_rot_6d", "socket_rot_6d"],
@@ -268,7 +275,8 @@ def test_task_space_input_spec_rejects_invalid_metadata(obs_order, message):
     export_module = _load_export_module()
 
     with pytest.raises(ValueError, match=message):
-        export_module.resolve_task_space_input_spec(SimpleNamespace(task_space_obs_order=obs_order))
+        export_module.resolve_task_space_input_spec(
+            SimpleNamespace(task_space_obs_order=obs_order))
 
 
 def test_task_space_action_matches_runner_clip_then_osc_scale():
@@ -292,7 +300,9 @@ def test_task_space_playback_inverts_deploy_transform_without_double_scaling():
     scale = torch.tensor([[0.025, 0.025, 0.01, 0.025, 0.025, 0.025]])
     deploy_action = export_module.process_task_space_action(raw_action, scale, clip_actions=1.0)
 
-    recovered = export_module.recover_task_space_policy_action(deploy_action, scale, clip_actions=1.0)
+    recovered = export_module.recover_task_space_policy_action(deploy_action,
+                                                               scale,
+                                                               clip_actions=1.0)
 
     torch.testing.assert_close(recovered, raw_action.clamp(-1.0, 1.0))
 
@@ -312,14 +322,10 @@ def test_task_space_playback_rejects_zero_action_scale():
 def test_task_space_action_scale_expands_scalar_and_per_axis_values():
     """Test OSC scales accept scalar and three-axis configuration values."""
     export_module = _load_export_module()
-    env_cfg = SimpleNamespace(
-        actions=SimpleNamespace(
-            arm_action=SimpleNamespace(
-                position_scale=[0.025, 0.025, 0.01],
-                orientation_scale=0.025,
-            )
-        )
-    )
+    env_cfg = SimpleNamespace(actions=SimpleNamespace(arm_action=SimpleNamespace(
+        position_scale=[0.025, 0.025, 0.01],
+        orientation_scale=0.025,
+    )))
 
     scale = export_module.task_space_action_scale(env_cfg, "cpu", torch.float32)
 
@@ -330,7 +336,8 @@ def test_task_space_action_scale_expands_scalar_and_per_axis_values():
     ("attribute", "value"),
     [
         pytest.param("position_scale", [0.025, 0.025], id="position-two-axis"),
-        pytest.param("orientation_scale", [0.025, 0.025, 0.025, 0.025], id="orientation-four-axis"),
+        pytest.param("orientation_scale", [0.025, 0.025, 0.025, 0.025],
+                     id="orientation-four-axis"),
     ],
 )
 def test_task_space_action_scale_rejects_invalid_axis_count(attribute, value):
@@ -347,11 +354,8 @@ def test_task_space_action_scale_rejects_invalid_axis_count(attribute, value):
 def test_task_space_action_scale_rejects_non_finite_values():
     """Test OSC scales reject non-finite deployment transforms."""
     export_module = _load_export_module()
-    env_cfg = SimpleNamespace(
-        actions=SimpleNamespace(
-            arm_action=SimpleNamespace(position_scale=[0.025, float("nan"), 0.01], orientation_scale=0.025)
-        )
-    )
+    env_cfg = SimpleNamespace(actions=SimpleNamespace(arm_action=SimpleNamespace(
+        position_scale=[0.025, float("nan"), 0.01], orientation_scale=0.025)))
 
     with pytest.raises(ValueError, match="position_scale must contain only finite values"):
         export_module.task_space_action_scale(env_cfg, "cpu", torch.float32)
@@ -362,6 +366,8 @@ def test_task_space_action_can_leave_runner_action_unclipped():
     export_module = _load_export_module()
     actions = torch.tensor([[-2.0, 2.0]])
 
-    processed = export_module.process_task_space_action(actions, torch.full((1, 2), 0.025), clip_actions=None)
+    processed = export_module.process_task_space_action(actions,
+                                                        torch.full((1, 2), 0.025),
+                                                        clip_actions=None)
 
     torch.testing.assert_close(processed, torch.tensor([[-0.05, 0.05]]))

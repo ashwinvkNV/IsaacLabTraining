@@ -1,7 +1,19 @@
-# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
-# All rights reserved.
+# SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+# Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
-# SPDX-License-Identifier: BSD-3-Clause
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
 
 """Task-space DisplayPort insertion environment for the Flexiv Rizon 4S + Grav gripper.
 
@@ -10,6 +22,7 @@ reset curriculum. The end-effector pose is commanded as a relative Cartesian del
 """
 
 import math
+import os
 
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg, RigidObjectCfg
@@ -19,20 +32,16 @@ from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
+import isaaclab.sim as sim_utils
 from isaaclab.utils.configclass import configclass
-from isaaclab_physx.sim.schemas import (
-    PhysxArticulationRootPropertiesCfg,
-    PhysxCollisionPropertiesCfg,
-    PhysxRigidBodyPropertiesCfg,
-)
-
+from isaaclab_assets import FLEXIV_RIZON4S_GRAV_GRIPPER_CFG
 import isaaclab_training.mdp as mdp
 import isaaclab_training.mdp.terminations as cable_terminations
 from isaaclab_training.tasks.displayport_insertion.displayport_insertion_env_cfg import (
+    DisplayportInsertionEnvCfg,
     PLUG_GOAL_ROT,
     PLUG_INSERTION_OFFSET,
     SOCKET_INSERTION_OFFSET,
-    DisplayportInsertionEnvCfg,
 )
 
 from .agents.rsl_rl_ppo_cfg import TASK_SPACE_NUM_STEPS_PER_ENV
@@ -43,8 +52,6 @@ from .joint_pos_env_cfg import (
     _SOCKET_ROT,
     set_finger_joint_pos_grav,
 )
-
-from isaaclab_assets import FLEXIV_RIZON4S_GRAV_GRIPPER_CFG  # isort: skip
 
 # Rizon 4S arm joint names.
 _ARM_JOINTS = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7"]
@@ -68,24 +75,61 @@ _ACTION_SCALE = 0.025
 # DisplayPort blade engagement along the insertion axis at the seated pose [m].
 _INSERTION_LENGTH = 0.011
 
-# Physical seat relative to the socket keypoint, expressed in the socket frame [m].
-# At-goal resets use this offset without changing the reward or observation keypoint.
-_AT_GOAL_SEAT_OFFSET = [0.00184, 0.0, -0.0006]
+# Physical seat of the plug relative to the socket keypoint, in the socket frame [m]
+# (+X = out of the socket along the insertion axis, Z = wide lateral axis). Measured in sim:
+# a free plug rests 1.84 mm above the keypoint and 0.45-0.80 mm towards -Z; the collision
+# meshes overlap by only the 0.15 mm rest-offset allowance there (vs 1.77 mm at the keypoint).
+# At-goal spawns are placed relative to this seat so they never start interpenetrating.
+_SEAT_OFFSET = [0.00184, 0.0, -0.0006]
 
-# Keep the shallowest valid spawn at the physical seat and retain the original
-# 15 mm upper depth measured from the reward keypoint.
+# Shallowest at-goal spawn along the insertion axis, measured from the socket keypoint [m].
 _AT_GOAL_MAX_DEPTH = 0.015
 
-# Keep the default curriculum horizon equal to 500 iterations of the original
-# 512-step rollout. Experiment manifests rescale it when the global environment
-# count changes.
-_AT_GOAL_ANNEAL_ENV_STEPS = 500 * 512
+# At-goal anneal length, in env steps: the first 500 of the 1,500 default 128-step iterations.
+_AT_GOAL_ANNEAL_ENV_STEPS = 500 * 128
+
+# Plug/socket solver position iterations. PhysX GPU runs the highest count in the scene for every
+# body,
+# so this sets the solver cost of the whole scene (128 -> 64: ~45 % less PhysX time per step).
+_PLUG_SOCKET_SOLVER_POSITION_ITERATIONS = 64
+
+# Plug mass properties exactly as PhysX derives them from the asset's collision shapes (including
+# the
+# disabled convex decompositions), measured with the PhysX rigid-body view: centre of mass [m] in
+# the plug
+# body frame, principal axes (w, x, y, z) and principal moments [kg m^2] for the 0.03 kg plug.
+# Authoring
+# them lets the disabled colliders be dropped without changing the plug's dynamics.
+_PLUG_CENTER_OF_MASS = (0.0029111250769346952, 0.0008471199544146657, 0.015430336818099022)
+_PLUG_PRINCIPAL_AXES_WXYZ = (0.9291425943374634, -0.013500147499144077, -0.3694750964641571,
+                             1.6308516933349892e-05)
+_PLUG_DIAGONAL_INERTIA = (3.6660012307437196e-06, 4.999659500369078e-06, 1.6410003934466692e-06)
+
+# Replacement collision geometry (precomputed from the asset meshes, rigid-body frames; see
+# collision/README.md):
+# - socket Body8 (housing), ON: exact SDF for the top 12.5 mm (flange, top face, upper cavity walls
+# -- everything the
+#   plug reaches), one 64-vertex convex hull for the never-contacted lower part (5.3k instead of
+# 43k SDF triangles).
+#   Contact geometry unchanged; ~1 % faster, 6-20 s faster env creation.
+# - plug casing as a 64-vertex convex hull (SDF kept only for the connector), OFF by default:
+# +21-30 % simulation
+#   throughput, but the hull deviates up to 0.16 mm from the curved casing the fingers grip, which
+# shifts the plug
+#   ~0.2 mm / ~0.7 deg in the gripper and jammed 2 of 8 tight-offset scripted insertions that the
+# SDF casing seats.
+#   Opt in with _USE_PLUG_CASING_HULL = True.
+_USE_PLUG_CASING_HULL = False
+_COLLISION_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "collision")
+_PLUG_COLLISION_PARTS = os.path.join(_COLLISION_DIR, "plug_connector_sdf_casing_hull.npz")
+_SOCKET_COLLISION_PARTS = os.path.join(_COLLISION_DIR, "socket_body8_top_sdf_lower_hull.npz")
+_SOCKET_BODY8_COLLIDER = "tn__2584N111_DisplayportCord_jP/Body8/Mesh"
 
 # Gripper tool-center-point (TCP) offset from the flange body, in the flange's local
 # frame [m]. The policy observes the TCP pose (where the plug is held), not the raw
 # flange; the TCP shares the flange orientation, so only the position is offset.
 _TCP_OFFSET = [0.0, 0.0, 0.2 - 0.0075]
-
 
 ##
 # Observation configuration
@@ -102,15 +146,25 @@ class TaskSpaceObservationsCfg:
 
         eef_pos = ObsTerm(
             func=mdp.eef_pos_w,
-            params={"asset_cfg": SceneEntityCfg("robot"), "body_name": "flange", "offset": _TCP_OFFSET},
+            params={
+                "asset_cfg": SceneEntityCfg("robot"),
+                "body_name": "flange",
+                "offset": _TCP_OFFSET
+            },
         )
         eef_rot_6d = ObsTerm(
             func=mdp.eef_rot_6d_w,
-            params={"asset_cfg": SceneEntityCfg("robot"), "body_name": "flange"},
+            params={
+                "asset_cfg": SceneEntityCfg("robot"),
+                "body_name": "flange"
+            },
         )
         socket_kp_pos = ObsTerm(
             func=mdp.rigid_object_pos_w,
-            params={"asset_cfg": SceneEntityCfg("dp_socket"), "offset": SOCKET_INSERTION_OFFSET},
+            params={
+                "asset_cfg": SceneEntityCfg("dp_socket"),
+                "offset": SOCKET_INSERTION_OFFSET
+            },
         )
         socket_kp_rot_6d = ObsTerm(
             func=mdp.rigid_object_rot_6d_w,
@@ -135,7 +189,10 @@ class TaskSpaceObservationsCfg:
         )
         socket_kp_pos = ObsTerm(
             func=mdp.rigid_object_pos_w,
-            params={"asset_cfg": SceneEntityCfg("dp_socket"), "offset": SOCKET_INSERTION_OFFSET},
+            params={
+                "asset_cfg": SceneEntityCfg("dp_socket"),
+                "offset": SOCKET_INSERTION_OFFSET
+            },
         )
         socket_kp_rot_6d = ObsTerm(
             func=mdp.rigid_object_rot_6d_w,
@@ -143,7 +200,10 @@ class TaskSpaceObservationsCfg:
         )
         plug_kp_pos = ObsTerm(
             func=mdp.rigid_object_pos_w,
-            params={"asset_cfg": SceneEntityCfg("dp_plug"), "offset": PLUG_INSERTION_OFFSET},
+            params={
+                "asset_cfg": SceneEntityCfg("dp_plug"),
+                "offset": PLUG_INSERTION_OFFSET
+            },
         )
         plug_kp_rot_6d = ObsTerm(
             func=mdp.rigid_object_rot_6d_w,
@@ -221,8 +281,9 @@ class TaskSpaceEventCfg:
     # At-goal reset curriculum: a fraction ``at_goal_prob`` of envs spawn the plug
     # already inserted at a random depth with goal orientation; the rest start from a
     # uniformly randomized approach pose. ``at_goal_prob`` anneals linearly from 0.8 to
-    # 0.0 over the original 256k environment-step horizon. At-goal depths are
-    # measured from the physical seat rather than the reward keypoint.
+    # 0.0 over the first 64k env steps (500 iterations at 128 steps) so the
+    # policy learns the full approach. At-goal depths are measured from the physical seat
+    # (``at_goal_seat_offset``) and span the same absolute 1.84-15 mm range as before.
     reset_plug_curriculum = EventTerm(
         func=mdp.reset_plug_at_goal_curriculum,
         mode="reset",
@@ -236,8 +297,8 @@ class TaskSpaceEventCfg:
             "num_steps_per_env": TASK_SPACE_NUM_STEPS_PER_ENV,
             "insertion_axis": [1.0, 0.0, 0.0],
             "insertion_length": _INSERTION_LENGTH,
-            "at_goal_depth_range": [0.0, _AT_GOAL_MAX_DEPTH - _AT_GOAL_SEAT_OFFSET[0]],
-            "at_goal_seat_offset": _AT_GOAL_SEAT_OFFSET,
+            "at_goal_depth_range": [0.0, _AT_GOAL_MAX_DEPTH - _SEAT_OFFSET[0]],
+            "at_goal_seat_offset": _SEAT_OFFSET,
             "approach_depth_range": [0.02, 0.06],
             "socket_insertion_offset": SOCKET_INSERTION_OFFSET,
             "plug_insertion_offset": PLUG_INSERTION_OFFSET,
@@ -255,7 +316,11 @@ class TaskSpaceEventCfg:
         mode="reset",
         params={
             "robot_asset_cfg": SceneEntityCfg("robot"),
-            "pos_randomization_range": {"x": [-0.0, 0.0], "y": [-0.0, 0.0], "z": [-0.0, 0.0]},
+            "pos_randomization_range": {
+                "x": [-0.0, 0.0],
+                "y": [-0.0, 0.0],
+                "z": [-0.0, 0.0]
+            },
             "target_object_name": "dp_plug",
             "grasp_offset": [0.0, 0.0, 0.0],
         },
@@ -352,20 +417,17 @@ class Rizon4sTaskSpaceDisplayportInsertionEnvCfg(DisplayportInsertionEnvCfg):
         self.terminations = TaskSpaceTerminationsCfg()
 
         self.terminations.plug_orientation_exceeded.params["roll_threshold_deg"] = (
-            self.plug_orientation_roll_threshold_deg
-        )
+            self.plug_orientation_roll_threshold_deg)
         self.terminations.plug_orientation_exceeded.params["pitch_threshold_deg"] = (
-            self.plug_orientation_pitch_threshold_deg
-        )
+            self.plug_orientation_pitch_threshold_deg)
         self.terminations.plug_orientation_exceeded.params["yaw_threshold_deg"] = (
-            self.plug_orientation_yaw_threshold_deg
-        )
+            self.plug_orientation_yaw_threshold_deg)
 
         # ----- Scene: robot -----
         self.scene.robot = FLEXIV_RIZON4S_GRAV_GRIPPER_CFG.replace(
             prim_path="{ENV_REGEX_NS}/Robot",
             spawn=FLEXIV_RIZON4S_GRAV_GRIPPER_CFG.spawn.replace(
-                rigid_props=PhysxRigidBodyPropertiesCfg(
+                rigid_props=sim_utils.RigidBodyPropertiesCfg(
                     disable_gravity=True,
                     max_depenetration_velocity=5.0,
                     linear_damping=0.0,
@@ -377,12 +439,13 @@ class Rizon4sTaskSpaceDisplayportInsertionEnvCfg(DisplayportInsertionEnvCfg):
                     solver_velocity_iteration_count=1,
                     max_contact_impulse=1e32,
                 ),
-                articulation_props=PhysxArticulationRootPropertiesCfg(
+                articulation_props=sim_utils.ArticulationRootPropertiesCfg(
                     enabled_self_collisions=False,
                     solver_position_iteration_count=4,
                     solver_velocity_iteration_count=1,
                 ),
-                collision_props=PhysxCollisionPropertiesCfg(contact_offset=0.005, rest_offset=0.0),
+                collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.005,
+                                                                 rest_offset=0.0),
             ),
             init_state=ArticulationCfg.InitialStateCfg(
                 joint_pos={
@@ -423,9 +486,35 @@ class Rizon4sTaskSpaceDisplayportInsertionEnvCfg(DisplayportInsertionEnvCfg):
             damping=0.0,
         )
 
+        # ----- Plug / socket physics -----
+        for asset in (self.scene.dp_plug, self.scene.dp_socket):
+            asset.spawn.rigid_props.solver_position_iteration_count = (
+                _PLUG_SOCKET_SOLVER_POSITION_ITERATIONS
+            )
+            # Disabled colliders take no part in contact; dropping them saves PhysX parsing/cooking
+            # per env.
+            asset.spawn.remove_disabled_colliders = True
+        # The plug's mass properties are pinned to what the disabled shapes produced. The socket is
+        # kinematic,
+        # so its mass properties (which shift slightly without its disabled SDF) do not enter the
+        # dynamics.
+        self.scene.dp_plug.spawn.center_of_mass = _PLUG_CENTER_OF_MASS
+        self.scene.dp_plug.spawn.principal_axes_wxyz = _PLUG_PRINCIPAL_AXES_WXYZ
+        self.scene.dp_plug.spawn.diagonal_inertia = _PLUG_DIAGONAL_INERTIA
+        # Simplified collision geometry where it does not mate (mass properties above stay pinned).
+        if _USE_PLUG_CASING_HULL:
+            self.scene.dp_plug.spawn.collision_parts_file = _PLUG_COLLISION_PARTS
+            self.scene.dp_plug.spawn.collision_parts_template = "collision_mesh"
+            self.scene.dp_plug.spawn.remove_colliders = ("collision_mesh", )
+        self.scene.dp_socket.spawn.collision_parts_file = _SOCKET_COLLISION_PARTS
+        self.scene.dp_socket.spawn.collision_parts_template = _SOCKET_BODY8_COLLIDER
+        self.scene.dp_socket.spawn.remove_colliders = (_SOCKET_BODY8_COLLIDER, )
+
         # ----- Workspace poses -----
-        self.scene.dp_socket.init_state = RigidObjectCfg.InitialStateCfg(pos=_SOCKET_ROOT, rot=_SOCKET_ROT)
-        self.scene.dp_plug.init_state = RigidObjectCfg.InitialStateCfg(pos=_PLUG_ROOT, rot=_PLUG_ROT)
+        self.scene.dp_socket.init_state = RigidObjectCfg.InitialStateCfg(pos=_SOCKET_ROOT,
+                                                                         rot=_SOCKET_ROT)
+        self.scene.dp_plug.init_state = RigidObjectCfg.InitialStateCfg(pos=_PLUG_ROOT,
+                                                                       rot=_PLUG_ROT)
 
         # Gripper widths for the DisplayPort plug.
         self.hand_grasp_width = 0.3
@@ -433,33 +522,40 @@ class Rizon4sTaskSpaceDisplayportInsertionEnvCfg(DisplayportInsertionEnvCfg):
         self.hand_close_width = -0.155
 
         # Wire grasp-event params.
-        self.events.set_robot_to_grasp_pose.params["end_effector_body_name"] = self.end_effector_body_name
+        self.events.set_robot_to_grasp_pose.params[
+            "end_effector_body_name"] = self.end_effector_body_name
         self.events.set_robot_to_grasp_pose.params["num_arm_joints"] = self.num_arm_joints
         self.events.set_robot_to_grasp_pose.params["grasp_rot_offset"] = self.grasp_rot_offset
         self.events.set_robot_to_grasp_pose.params["grasp_offset"] = self.grasp_offset
-        self.events.set_robot_to_grasp_pose.params["gripper_joint_setter_func"] = self.gripper_joint_setter_func
-        self.events.set_robot_to_grasp_pose.params["pos_threshold"] = 1.0e-5
-        self.events.set_robot_to_grasp_pose.params["rot_threshold"] = 1.0e-5
+        self.events.set_robot_to_grasp_pose.params[
+            "gripper_joint_setter_func"] = self.gripper_joint_setter_func
+        # Reset IK: DLS reaches ~3 um in ~5 iterations; the float32 world-coordinate floor is
+        # up to ~15 um for envs far from the origin, so 1e-6 is never met and all iterations ran.
+        # 1e-5 exits after 5-6 iterations (<= 11 um); 50 caps the rare floor-limited reset batch.
+        self.events.set_robot_to_grasp_pose.params["pos_threshold"] = 1e-5
+        self.events.set_robot_to_grasp_pose.params["rot_threshold"] = 1e-5
         self.events.set_robot_to_grasp_pose.params["max_iterations"] = 50
 
         # Wire termination params.
-        self.terminations.plug_dropped.params["end_effector_body_name"] = self.end_effector_body_name
+        self.terminations.plug_dropped.params[
+            "end_effector_body_name"] = self.end_effector_body_name
         self.terminations.plug_dropped.params["grasp_offset"] = self.grasp_offset
         self.terminations.plug_dropped.params["grasp_rot_offset"] = self.grasp_rot_offset
 
-        self.terminations.plug_orientation_exceeded.params["end_effector_body_name"] = self.end_effector_body_name
-        self.terminations.plug_orientation_exceeded.params["grasp_rot_offset"] = self.grasp_rot_offset
+        self.terminations.plug_orientation_exceeded.params[
+            "end_effector_body_name"] = self.end_effector_body_name
+        self.terminations.plug_orientation_exceeded.params[
+            "grasp_rot_offset"] = self.grasp_rot_offset
 
         # Use 1:1 linear:exponential keypoint-tracking reward weighting.
-        self.rewards.plug_socket_keypoint_tracking_exp.weight = abs(self.rewards.plug_socket_keypoint_tracking.weight)
+        self.rewards.plug_socket_keypoint_tracking_exp.weight = abs(
+            self.rewards.plug_socket_keypoint_tracking.weight)
 
+    def play_mode(self):
+        """Apply playback overrides on top of the shared Isaac Lab defaults.
 
-@configclass
-class Rizon4sTaskSpaceDisplayportInsertionEnvCfg_PLAY(Rizon4sTaskSpaceDisplayportInsertionEnvCfg):
-    """Play configuration for task-space DisplayPort insertion."""
-
-    def __post_init__(self):
-        super().__post_init__()
-        self.scene.num_envs = 50
+        ``super().play_mode()`` caps ``num_envs`` and disables observation corruption; only the
+        wider env spacing is specific to this task.
+        """
+        super().play_mode()
         self.scene.env_spacing = 2.5
-        self.observations.policy.enable_corruption = False

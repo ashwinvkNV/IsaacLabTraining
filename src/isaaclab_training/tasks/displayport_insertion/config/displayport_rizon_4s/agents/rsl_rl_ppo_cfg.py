@@ -1,18 +1,36 @@
-# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+# Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Copyright (c) 2022-2026, The Isaac Lab Project Developers
+# (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
 from isaaclab.utils.configclass import configclass
-
-from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg, RslRlRNNModelCfg
-
+from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg
+from isaaclab_rl.rsl_rl import RslRlPpoAlgorithmCfg
+from isaaclab_rl.rsl_rl import RslRlRNNModelCfg
 
 _BASE_NUM_STEPS_PER_ENV = 512
 _BASE_MAX_ITERATIONS = 1500
 _BASE_SAVE_INTERVAL = 50
 TASK_SPACE_NUM_STEPS_PER_ENV = 128
-_TASK_SPACE_ITER_SCALE = _BASE_NUM_STEPS_PER_ENV // TASK_SPACE_NUM_STEPS_PER_ENV
+TASK_SPACE_MAX_ITERATIONS = 1500
 
 
 @configclass
@@ -65,18 +83,19 @@ class Rizon4sGravDisplayportInsertionRNNPPORunnerCfg(RslRlOnPolicyRunnerCfg):
 
 
 @configclass
-class Rizon4sGravDisplayportInsertionTaskSpaceRNNPPORunnerCfg(Rizon4sGravDisplayportInsertionRNNPPORunnerCfg):
+class Rizon4sGravDisplayportInsertionTaskSpaceRNNPPORunnerCfg(
+        Rizon4sGravDisplayportInsertionRNNPPORunnerCfg):
     """Task-space runner with a memory-efficient recurrent rollout."""
 
     num_steps_per_env = TASK_SPACE_NUM_STEPS_PER_ENV
-    max_iterations = _BASE_MAX_ITERATIONS * _TASK_SPACE_ITER_SCALE
-    save_interval = _BASE_SAVE_INTERVAL * _TASK_SPACE_ITER_SCALE
+    max_iterations = TASK_SPACE_MAX_ITERATIONS
+    save_interval = _BASE_SAVE_INTERVAL
 
 
 @configclass
-class Rizon4sGravDisplayportInsertionNewtonRNNPPORunnerCfg(Rizon4sGravDisplayportInsertionTaskSpaceRNNPPORunnerCfg):
+class Rizon4sGravDisplayportInsertionNewtonRNNPPORunnerCfg(
+        Rizon4sGravDisplayportInsertionTaskSpaceRNNPPORunnerCfg):
     """RSL-RL runner for the Newton task-space training profile."""
 
     seed = 123
-    max_iterations = 1000 * _TASK_SPACE_ITER_SCALE
     experiment_name = "displayport_insertion_rizon4s_newton_osc"

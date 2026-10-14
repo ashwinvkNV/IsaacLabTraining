@@ -1,13 +1,24 @@
-# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
-# All rights reserved.
+# SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+# Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
-# SPDX-License-Identifier: BSD-3-Clause
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
 
 import math
 
 from isaaclab.assets import RigidObjectCfg
 from isaaclab.utils.configclass import configclass
-
 from isaaclab_training.tasks.displayport_insertion.displayport_insertion_env_cfg import (
     compute_plug_pose,
     compute_socket_root,
@@ -50,7 +61,8 @@ class Rizon4sGravDisplayportInsertionROSInferenceEnvCfg(Rizon4sGravDisplayportIn
         self.arm_joint_names = self.observations.policy.joint_pos.params["asset_cfg"].joint_names
         # Use inherited num_arm_joints from parent
         self.action_space = self.num_arm_joints
-        # State: 7 joint pos + 7 joint vel + 3 socket pos + 4 socket quat + 3 plug pos + 4 plug quat = 28
+        # State: 7 joint pos + 7 joint vel + 3 socket pos + 4 socket quat + 3 plug pos + 4 plug
+        # quat = 28
         self.state_space = 28
         # Observation: 7 joint pos + 7 joint vel + 3 socket pos + 4 socket quat = 21
         self.observation_space = 21
@@ -116,7 +128,8 @@ class Rizon4sGravDisplayportInsertionROSInferenceEnvCfg(Rizon4sGravDisplayportIn
 
 
 @configclass
-class Rizon4sGravDisplayportInsertionNoJointVelROSInferenceEnvCfg(Rizon4sGravDisplayportInsertionROSInferenceEnvCfg):
+class Rizon4sGravDisplayportInsertionNoJointVelROSInferenceEnvCfg(
+        Rizon4sGravDisplayportInsertionROSInferenceEnvCfg):
     """ROS inference configuration without joint velocity in the policy observation."""
 
     def __post_init__(self):
@@ -129,5 +142,6 @@ class Rizon4sGravDisplayportInsertionNoJointVelROSInferenceEnvCfg(Rizon4sGravDis
         self.obs_order = ["arm_dof_pos", "socket_pos", "socket_quat"]
         # Observation: 7 joint pos + 3 socket pos + 4 socket quat = 14
         self.observation_space = 14
-        # State (critic) is unchanged: 7 jpos + 7 jvel + 3 socket pos + 4 socket quat + 3 plug pos + 4 plug quat = 28
+        # State (critic) is unchanged: 7 jpos + 7 jvel + 3 socket pos + 4 socket quat + 3 plug pos
+        # + 4 plug quat = 28
         self.state_space = 28

@@ -1,18 +1,15 @@
-# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# Copyright (c) 2022-2026, The Isaac Lab Project Developers
+# (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-
 """Tests for the Newton DisplayPort insertion production configuration."""
 
-import math
 from dataclasses import fields
+import math
 from types import SimpleNamespace
 
 import gymnasium as gym
-import pytest
-import torch
-import warp as wp
 from isaaclab.actuators import IdealPDActuatorCfg, ImplicitActuatorCfg
 from isaaclab.controllers.operational_space_cfg import OperationalSpaceControllerCfg
 from isaaclab.managers import ObservationTermCfg, SceneEntityCfg
@@ -25,8 +22,6 @@ from isaaclab_physx.physics import PhysxCfg
 from isaaclab_physx.sim.schemas import PhysxCollisionCfg
 from isaaclab_tasks.utils.hydra import resolve_presets
 from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry
-
-import isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s  # noqa: F401
 from isaaclab_training.mdp import DeployOperationalSpaceControllerActionCfg
 from isaaclab_training.mdp import events as deploy_events
 from isaaclab_training.mdp.actions import _pose_rel_action_extra
@@ -38,6 +33,7 @@ from isaaclab_training.mdp.events import (
 )
 from isaaclab_training.mdp.noise_models import ResetSampledConstantNoiseModelCfg
 from isaaclab_training.mdp.observations import eef_pos_w, rigid_object_pos_w
+import isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s  # noqa: F401
 from isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s import (
     task_space_newton_env_cfg as newton_cfg,
 )
@@ -47,29 +43,32 @@ from isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s i
 from isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s import (
     task_space_ros_inference_env_cfg as physx_ros_cfg,
 )
-from isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s.agents.rsl_rl_ppo_cfg import (
-    Rizon4sGravDisplayportInsertionNewtonRNNPPORunnerCfg,
-    Rizon4sGravDisplayportInsertionRNNPPORunnerCfg,
-    Rizon4sGravDisplayportInsertionTaskSpaceRNNPPORunnerCfg,
-)
-from isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s.joint_pos_env_cfg import (
-    set_finger_joint_pos_grav,
-)
-from isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s.task_space_env_cfg import (
-    Rizon4sTaskSpaceDisplayportInsertionEnvCfg,
-)
-from isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s.task_space_newton_env_cfg import (
-    DisplayportNewtonPhysicsCfg,
-    Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg,
-    Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg_PLAY,
-    _is_valid_diagonal_inertia,
-    _is_valid_principal_axes,
-    _spawn_plug_with_validated_sdf_meshes,
-    _spawn_rizon_with_validated_flange_inertia,
-    _spawn_socket_with_validated_sdf_meshes,
-    _uniform_sphere_inertia,
-    _use_explicit_effort_control_arm_actuators,
-)
+from isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s \
+    .agents.rsl_rl_ppo_cfg import (
+        Rizon4sGravDisplayportInsertionNewtonRNNPPORunnerCfg,
+        Rizon4sGravDisplayportInsertionRNNPPORunnerCfg,
+        Rizon4sGravDisplayportInsertionTaskSpaceRNNPPORunnerCfg,
+    )
+from isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s \
+    .joint_pos_env_cfg import set_finger_joint_pos_grav
+from isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s \
+    .task_space_env_cfg import Rizon4sTaskSpaceDisplayportInsertionEnvCfg
+from isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s \
+    .task_space_newton_env_cfg import (
+        _is_valid_diagonal_inertia,
+        _is_valid_principal_axes,
+        _NEWTON_MEASURED_PEAK_CONSTRAINT_ROWS_PER_WORLD,
+        _NEWTON_MEASURED_PEAK_CONTACTS_PER_WORLD,
+        _NEWTON_NCONMAX_PER_WORLD,
+        _NEWTON_NJMAX_PER_WORLD,
+        _spawn_plug_with_validated_sdf_meshes,
+        _spawn_rizon_with_validated_flange_inertia,
+        _spawn_socket_with_validated_sdf_meshes,
+        _uniform_sphere_inertia,
+        _use_explicit_effort_control_arm_actuators,
+        DisplayportNewtonPhysicsCfg,
+        Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg,
+    )
 from isaaclab_training.tasks.displayport_insertion.displayport_insertion_env_cfg import (
     _DISPLAY_ASSETS_DEFAULT_DIR,
     DISPLAY_ASSETS_DIR,
@@ -77,34 +76,38 @@ from isaaclab_training.tasks.displayport_insertion.displayport_insertion_env_cfg
     PLUG_INSERTION_OFFSET,
     SOCKET_INSERTION_OFFSET,
 )
+import pytest
+import torch
+import warp as wp
 
 _ARM_JOINTS = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7"]
-_ENV_ENTRY_POINT = "isaaclab_training.tasks.displayport_insertion.insertion_env:DisplayportInsertionEnv"
+_ENV_ENTRY_POINT = (
+    "isaaclab_training.tasks.displayport_insertion.insertion_env:DisplayportInsertionEnv"
+)
 _CFG_PACKAGE = "isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s"
 _AGENT_MODULE = f"{_CFG_PACKAGE}.agents.rsl_rl_ppo_cfg"
 
 
 def _observation_term_names(group: object) -> list[str]:
     """Return observation terms in their concatenation order."""
-    return [field.name for field in fields(group) if isinstance(getattr(group, field.name), ObservationTermCfg)]
+    return [
+        field.name for field in fields(group)
+        if isinstance(getattr(group, field.name), ObservationTermCfg)
+    ]
 
 
 def test_displayport_curriculum_composes_physical_seat_in_socket_frame() -> None:
     """Only at-goal rows receive the socket-local physical-seat offset."""
-    keypoint_origin = torch.tensor(
-        [
-            [1.0, 2.0, 3.0],
-            [4.0, 5.0, 6.0],
-            [7.0, 8.0, 9.0],
-        ]
-    )
-    socket_quat = torch.tensor(
-        [
-            [0.0, 0.0, 0.0, 1.0],
-            [0.0, 0.0, math.sqrt(0.5), math.sqrt(0.5)],
-            [0.0, 0.0, math.sqrt(0.5), math.sqrt(0.5)],
-        ]
-    )
+    keypoint_origin = torch.tensor([
+        [1.0, 2.0, 3.0],
+        [4.0, 5.0, 6.0],
+        [7.0, 8.0, 9.0],
+    ])
+    socket_quat = torch.tensor([
+        [0.0, 0.0, 0.0, 1.0],
+        [0.0, 0.0, math.sqrt(0.5), math.sqrt(0.5)],
+        [0.0, 0.0, math.sqrt(0.5), math.sqrt(0.5)],
+    ])
     insertion_axis = torch.tensor([1.0, 0.0, 0.0])
     depth = torch.tensor([0.0, 0.02, 0.02])
     at_goal_mask = torch.tensor([True, True, False])
@@ -119,11 +122,31 @@ def test_displayport_curriculum_composes_physical_seat_in_socket_frame() -> None
         seat_offset,
     )
 
-    torch.testing.assert_close(result[0], torch.tensor([1.00184, 2.0, 2.9994]), atol=1.0e-7, rtol=0.0)
-    # The rotated at-goal row must rotate both the local +X depth and seat offset.
-    torch.testing.assert_close(result[1], torch.tensor([4.0, 5.02184, 5.9994]), atol=1.0e-7, rtol=0.0)
-    # The approach row uses the same rotated insertion axis without the seat offset.
+    torch.testing.assert_close(result[0],
+                               torch.tensor([1.00184, 2.0, 2.9994]),
+                               atol=1.0e-7,
+                               rtol=0.0)
+    torch.testing.assert_close(result[1],
+                               torch.tensor([4.0, 5.02184, 5.9994]),
+                               atol=1.0e-7,
+                               rtol=0.0)
     torch.testing.assert_close(result[2], torch.tensor([7.0, 8.02, 9.0]), atol=1.0e-7, rtol=0.0)
+
+
+@pytest.mark.parametrize(
+    "cfg_cls",
+    [
+        Rizon4sTaskSpaceDisplayportInsertionEnvCfg,
+        Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg,
+    ],
+)
+def test_displayport_effective_reset_curricula_keep_physical_seat_bounds(cfg_cls: type) -> None:
+    """Static regression for the reset curriculum geometry contract."""
+    cfg = cfg_cls()
+    curriculum = cfg.events.reset_plug_curriculum.params
+
+    assert curriculum["at_goal_depth_range"] == pytest.approx([0.0, 0.01316])
+    assert curriculum["at_goal_seat_offset"] == pytest.approx([0.00184, 0.0, -0.0006])
 
 
 @pytest.mark.parametrize(
@@ -152,7 +175,8 @@ def test_displayport_grasp_reset_selects_backend_neutral_jacobians(
     torch.testing.assert_close(selected, jacobians[env_ids, expected_body_idx, :, num_base_dofs:])
 
 
-def test_displayport_grasp_reset_holds_randomized_target_during_ik(monkeypatch: pytest.MonkeyPatch):
+def test_displayport_grasp_reset_holds_randomized_target_during_ik(
+        monkeypatch: pytest.MonkeyPatch):
     """A reset must sample one grasp offset and hold it fixed across all IK iterations."""
     num_envs = 2
     num_arm_joints = 7
@@ -234,7 +258,11 @@ def test_displayport_grasp_reset_holds_randomized_target_during_ik(monkeypatch: 
         env,
         env_ids,
         max_iterations=3,
-        pos_randomization_range={"x": (-0.01, 0.01), "y": (-0.01, 0.01), "z": (-0.01, 0.01)},
+        pos_randomization_range={
+            "x": (-0.01, 0.01),
+            "y": (-0.01, 0.01),
+            "z": (-0.01, 0.01)
+        },
     )
 
     assert sample_count == 1
@@ -256,7 +284,8 @@ def test_displayport_grasp_reset_supports_legacy_four_argument_gripper_callback(
     term.joint_name_to_idx = {"finger_joint": 7}
     joint_pos = torch.zeros(1, 8)
 
-    with pytest.warns(DeprecationWarning, match="Four-argument gripper_joint_setter_func") as warnings_record:
+    with pytest.warns(DeprecationWarning,
+                      match="Four-argument gripper_joint_setter_func") as warnings_record:
         term._set_gripper_joint_position(joint_pos, [0], [7], -0.1)
         term._set_gripper_joint_position(joint_pos, [0], [7], -0.2)
 
@@ -302,7 +331,7 @@ def test_displayport_grav_reset_preserves_legacy_positional_joint_order():
     expected = {8: -0.1, 2: -0.1, 5: -0.1, 1: -0.1, 9: 0.1, 4: 0.1}
     for joint_idx, value in expected.items():
         assert joint_pos[0, joint_idx] == pytest.approx(value)
-    torch.testing.assert_close(joint_pos[1], torch.full((10,), 42.0))
+    torch.testing.assert_close(joint_pos[1], torch.full((10, ), 42.0))
 
 
 def test_displayport_grav_reset_sets_mimic_joints_by_name():
@@ -337,7 +366,7 @@ def test_displayport_grav_reset_sets_mimic_joints_by_name():
     }
     for joint_name, gearing in expected_gearing.items():
         assert joint_pos[0, joint_name_to_idx[joint_name]] == pytest.approx(-0.1 * gearing)
-    torch.testing.assert_close(joint_pos[1], torch.full((13,), 42.0))
+    torch.testing.assert_close(joint_pos[1], torch.full((13, ), 42.0))
 
 
 def test_rigid_object_offset_is_rotated_and_cached_as_a_batch_view():
@@ -348,16 +377,16 @@ def test_rigid_object_offset_is_rotated_and_cached_as_a_batch_view():
 
     positions = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
     quaternions = torch.tensor([[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, math.sqrt(0.5), math.sqrt(0.5)]])
-    scene = Scene(
-        dp_socket=SimpleNamespace(
-            data=SimpleNamespace(root_pos_w=wp.from_torch(positions), root_quat_w=wp.from_torch(quaternions))
-        )
-    )
+    scene = Scene(dp_socket=SimpleNamespace(data=SimpleNamespace(
+        root_pos_w=wp.from_torch(positions), root_quat_w=wp.from_torch(quaternions))))
     scene.env_origins = torch.tensor([[0.5, 0.5, 0.5], [1.0, 1.0, 1.0]])
     env = SimpleNamespace(device="cpu", num_envs=2, scene=scene)
     cfg = ObservationTermCfg(
         func=rigid_object_pos_w,
-        params={"asset_cfg": SceneEntityCfg("dp_socket"), "offset": [1.0, 0.0, 0.0]},
+        params={
+            "asset_cfg": SceneEntityCfg("dp_socket"),
+            "offset": [1.0, 0.0, 0.0]
+        },
     )
     term = rigid_object_pos_w(cfg, env)
     offset_batch_data_ptr = term._offset_batch.data_ptr()
@@ -388,7 +417,11 @@ def test_zero_eef_offset_skips_orientation_lookup():
     env = SimpleNamespace(device="cpu", num_envs=2, scene=scene)
     cfg = ObservationTermCfg(
         func=eef_pos_w,
-        params={"asset_cfg": SceneEntityCfg("robot"), "body_name": "flange", "offset": [0.0, 0.0, 0.0]},
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+            "body_name": "flange",
+            "offset": [0.0, 0.0, 0.0]
+        },
     )
 
     observed = eef_pos_w(cfg, env)(env)
@@ -429,7 +462,7 @@ def test_newton_flange_principal_axes_validation(quaternion, expected):
 
 def test_newton_flange_inertia_matches_documented_fallback():
     """The authored nominal inertia must reproduce Newton's former deterministic fallback."""
-    assert _uniform_sphere_inertia(1.0e-4) == pytest.approx((3.3164051824e-10,) * 3)
+    assert _uniform_sphere_inertia(1.0e-4) == pytest.approx((3.3164051824e-10, ) * 3)
     with pytest.raises(ValueError, match="positive and finite"):
         _uniform_sphere_inertia(0.0)
 
@@ -474,7 +507,8 @@ def test_newton_flange_inertia_is_authored_before_multi_env_clone(monkeypatch: p
         assert tuple(principal_axes.GetImaginary()) == pytest.approx((0.0, 0.0, 0.0))
 
 
-def test_newton_flange_rejects_valid_inertia_with_invalid_principal_axes(monkeypatch: pytest.MonkeyPatch):
+def test_newton_flange_rejects_valid_inertia_with_invalid_principal_axes(
+        monkeypatch: pytest.MonkeyPatch):
     """A calibrated asset must not preserve an invalid principal-axis quaternion."""
     from pxr import Gf, Usd, UsdGeom, UsdPhysics
 
@@ -511,11 +545,8 @@ def test_displayport_newton_tasks_route_to_dedicated_configs():
     """Newton registrations must not replace or redirect existing PhysX tasks."""
     expected = {
         "IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton": (
-            f"{_CFG_PACKAGE}.task_space_newton_env_cfg:Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg",
-            f"{_AGENT_MODULE}:Rizon4sGravDisplayportInsertionNewtonRNNPPORunnerCfg",
-        ),
-        "IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-Play": (
-            f"{_CFG_PACKAGE}.task_space_newton_env_cfg:Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg_PLAY",
+            f"{_CFG_PACKAGE}.task_space_newton_env_cfg:"
+            f"Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg",
             f"{_AGENT_MODULE}:Rizon4sGravDisplayportInsertionNewtonRNNPPORunnerCfg",
         ),
         "IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-ROS-Inference": (
@@ -524,11 +555,8 @@ def test_displayport_newton_tasks_route_to_dedicated_configs():
             f"{_AGENT_MODULE}:Rizon4sGravDisplayportInsertionNewtonRNNPPORunnerCfg",
         ),
         "IsaacContrib-Deploy-DisplayportInsertion-Rizon4s-Grav-TaskSpace-Newton": (
-            f"{_CFG_PACKAGE}.task_space_newton_env_cfg:Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg",
-            f"{_AGENT_MODULE}:Rizon4sGravDisplayportInsertionNewtonRNNPPORunnerCfg",
-        ),
-        "IsaacContrib-Deploy-DisplayportInsertion-Rizon4s-Grav-TaskSpace-Newton-Play": (
-            f"{_CFG_PACKAGE}.task_space_newton_env_cfg:Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg_PLAY",
+            f"{_CFG_PACKAGE}.task_space_newton_env_cfg:"
+            f"Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg",
             f"{_AGENT_MODULE}:Rizon4sGravDisplayportInsertionNewtonRNNPPORunnerCfg",
         ),
         "IsaacContrib-Deploy-DisplayportInsertion-Rizon4s-Grav-TaskSpace-Newton-ROS-Inference": (
@@ -540,12 +568,9 @@ def test_displayport_newton_tasks_route_to_dedicated_configs():
             f"{_CFG_PACKAGE}.task_space_env_cfg:Rizon4sTaskSpaceDisplayportInsertionEnvCfg",
             f"{_AGENT_MODULE}:Rizon4sGravDisplayportInsertionTaskSpaceRNNPPORunnerCfg",
         ),
-        "IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Play": (
-            f"{_CFG_PACKAGE}.task_space_env_cfg:Rizon4sTaskSpaceDisplayportInsertionEnvCfg_PLAY",
-            f"{_AGENT_MODULE}:Rizon4sGravDisplayportInsertionTaskSpaceRNNPPORunnerCfg",
-        ),
         "IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-ROS-Inference": (
-            f"{_CFG_PACKAGE}.task_space_ros_inference_env_cfg:Rizon4sTaskSpaceDisplayportInsertionROSInferenceEnvCfg",
+            f"{_CFG_PACKAGE}.task_space_ros_inference_env_cfg:"
+            f"Rizon4sTaskSpaceDisplayportInsertionROSInferenceEnvCfg",
             f"{_AGENT_MODULE}:Rizon4sGravDisplayportInsertionTaskSpaceRNNPPORunnerCfg",
         ),
     }
@@ -561,8 +586,8 @@ def test_displayport_newton_tasks_route_to_dedicated_configs():
 @pytest.mark.parametrize(
     ("task_id", "expected_num_envs"),
     [
-        pytest.param("IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton", 256, id="training"),
-        pytest.param("IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-Play", 50, id="play"),
+        pytest.param(
+            "IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton", 256, id="training"),
         pytest.param(
             "IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-ROS-Inference",
             256,
@@ -570,7 +595,8 @@ def test_displayport_newton_tasks_route_to_dedicated_configs():
         ),
     ],
 )
-def test_registered_displayport_newton_tasks_resolve_compatible_safe_defaults(task_id: str, expected_num_envs: int):
+def test_registered_displayport_newton_tasks_resolve_compatible_safe_defaults(
+        task_id: str, expected_num_envs: int):
     """Every Newton variant must resolve to Newton with its supported shard size."""
     cfg = resolve_presets(load_cfg_from_registry(task_id, "env_cfg_entry_point"))
     runner = load_cfg_from_registry(task_id, "rsl_rl_cfg_entry_point")
@@ -578,7 +604,8 @@ def test_registered_displayport_newton_tasks_resolve_compatible_safe_defaults(ta
     assert isinstance(cfg.sim.physics, NewtonCfg)
     assert isinstance(cfg.actions.arm_action, DeployOperationalSpaceControllerActionCfg)
     assert cfg.scene.num_envs == expected_num_envs
-    assert cfg.sim.physics.collision_cfg.max_triangle_pairs == 2**25
+    assert cfg.newton_triangle_pairs_per_env == 12288
+    assert cfg.sim.physics.collision_cfg.max_triangle_pairs == 12288 * 256
     assert runner.seed == 123
     assert runner.clip_actions == pytest.approx(1.0)
     cfg.validate()
@@ -608,19 +635,32 @@ def test_displayport_newton_timing_solver_and_point_sdf_assets():
     assert solver.solver == "newton"
     assert solver.integrator == "implicitfast"
     assert solver.use_mujoco_contacts is False
+    assert solver.njmax == _NEWTON_NJMAX_PER_WORLD == 2048
+    assert solver.nconmax == _NEWTON_NCONMAX_PER_WORLD == 1024
+    assert solver.njmax >= 2 * _NEWTON_MEASURED_PEAK_CONSTRAINT_ROWS_PER_WORLD
+    assert solver.nconmax >= 2 * _NEWTON_MEASURED_PEAK_CONTACTS_PER_WORLD
 
     collision = physics.collision_cfg
     assert collision is not None
     assert collision.reduce_contacts is True
-    assert collision.max_triangle_pairs == 2**25
+    assert cfg.newton_triangle_pairs_per_env == 12288
+    assert collision.max_triangle_pairs == 12288 * 256
 
     expected_default_asset_dir = f"{ISAAC_NUCLEUS_DIR}/Props/Factory/display_port_cable_assets"
     assert expected_default_asset_dir == _DISPLAY_ASSETS_DEFAULT_DIR
     assert "staging" not in _DISPLAY_ASSETS_DEFAULT_DIR
     assert cfg.scene.dp_plug.spawn.usd_path == f"{DISPLAY_ASSETS_DIR}/displayport_plug.usd"
-    assert cfg.scene.dp_socket.spawn.usd_path == f"{DISPLAY_ASSETS_DIR}/displayport_socket_no_protrusions.usd"
-    plug_sdf_paths = ("/collision_mesh",)
-    socket_sdf_paths = tuple(f"/tn__2584N111_DisplayportCord_jP/Body{body_id}/Mesh" for body_id in (5, 6, 8, 12, 13))
+    assert cfg.scene.dp_socket.spawn.usd_path == (
+        f"{DISPLAY_ASSETS_DIR}/displayport_socket_no_protrusions.usd"
+    )
+    for asset_cfg in (cfg.scene.dp_plug, cfg.scene.dp_socket):
+        assert asset_cfg.spawn.remove_disabled_colliders is False
+        assert asset_cfg.spawn.collision_parts_file is None
+        assert asset_cfg.spawn.collision_parts_template is None
+        assert asset_cfg.spawn.remove_colliders == ()
+    plug_sdf_paths = ("/collision_mesh", )
+    socket_sdf_paths = tuple(f"/tn__2584N111_DisplayportCord_jP/Body{body_id}/Mesh"
+                             for body_id in (5, 6, 8, 12, 13))
     collision_fragment_sets = (
         (cfg.scene.dp_plug.spawn.collision_props, 0.00001, -0.00005, plug_sdf_paths),
         (cfg.scene.dp_socket.spawn.collision_props, 0.0001, -0.0001, socket_sdf_paths),
@@ -631,15 +671,18 @@ def test_displayport_newton_timing_solver_and_point_sdf_assets():
         physx_fragments = mapping["/.*"]
         assert not any(isinstance(fragment, NewtonCollisionCfg) for fragment in physx_fragments)
         assert not any(isinstance(fragment, NewtonSDFCollisionCfg) for fragment in physx_fragments)
-        physx = next(fragment for fragment in physx_fragments if isinstance(fragment, PhysxCollisionCfg))
+        physx = next(fragment for fragment in physx_fragments
+                     if isinstance(fragment, PhysxCollisionCfg))
         assert physx.contact_offset == pytest.approx(contact_offset)
         assert physx.rest_offset == pytest.approx(rest_offset)
 
         for prim_path in sdf_paths:
             fragments = mapping[prim_path]
             assert not any(isinstance(fragment, PhysxCollisionCfg) for fragment in fragments)
-            collision = next(fragment for fragment in fragments if isinstance(fragment, NewtonCollisionCfg))
-            sdf = next(fragment for fragment in fragments if isinstance(fragment, NewtonSDFCollisionCfg))
+            collision = next(fragment for fragment in fragments
+                             if isinstance(fragment, NewtonCollisionCfg))
+            sdf = next(fragment for fragment in fragments
+                       if isinstance(fragment, NewtonSDFCollisionCfg))
             assert collision.contact_margin == pytest.approx(0.0)
             assert collision.contact_gap == pytest.approx(0.005)
             assert sdf.sdf_max_resolution == 256
@@ -675,8 +718,9 @@ def test_displayport_newton_osc_abi_robot_and_gravity_settings():
     assert controller.inertial_dynamics_decoupling is True
     assert controller.partial_inertial_dynamics_decoupling is False
     assert controller.gravity_compensation is False
-    assert tuple(controller.motion_stiffness_task) == pytest.approx((300.0, 300.0, 300.0, 30.0, 30.0, 30.0))
-    assert tuple(controller.motion_damping_ratio_task) == pytest.approx((1.0,) * 6)
+    assert tuple(controller.motion_stiffness_task) == pytest.approx(
+        (300.0, 300.0, 300.0, 30.0, 30.0, 30.0))
+    assert tuple(controller.motion_damping_ratio_task) == pytest.approx((1.0, ) * 6)
     assert controller.nullspace_control == "none"
 
     assert cfg.scene.robot.spawn.rigid_props.gravcomp == pytest.approx(1.0)
@@ -730,7 +774,8 @@ def test_displayport_newton_observation_abi_noise_and_deployment_metadata():
     assert actor.concatenate_terms is True
     assert actor.enable_corruption is True
     assert actor.socket_pos.params["asset_cfg"].name == "dp_socket"
-    assert tuple(actor.socket_pos.params["offset"]) == pytest.approx(tuple(SOCKET_INSERTION_OFFSET))
+    assert tuple(actor.socket_pos.params["offset"]) == pytest.approx(
+        tuple(SOCKET_INSERTION_OFFSET))
     assert isinstance(actor.socket_pos.noise, ResetSampledConstantNoiseModelCfg)
     assert isinstance(actor.socket_pos.noise.noise_cfg, UniformNoiseCfg)
     assert actor.socket_pos.noise.noise_cfg.n_min == pytest.approx(-0.01)
@@ -835,6 +880,8 @@ def test_displayport_newton_domain_randomization_curriculum_and_rewards():
     assert curriculum["insertion_length"] == pytest.approx(0.011)
     assert curriculum["at_goal_depth_range"] == pytest.approx([0.0, 0.01316])
     assert curriculum["at_goal_seat_offset"] == pytest.approx([0.00184, 0.0, -0.0006])
+    assert curriculum["at_goal_depth_range"][1] + curriculum["at_goal_seat_offset"][
+        0] == pytest.approx(0.015)
     assert curriculum["approach_depth_range"] == pytest.approx([0.02, 0.06])
     assert curriculum["socket_insertion_offset"] == pytest.approx(SOCKET_INSERTION_OFFSET)
     assert curriculum["plug_insertion_offset"] == pytest.approx(PLUG_INSERTION_OFFSET)
@@ -869,7 +916,8 @@ def test_displayport_newton_domain_randomization_curriculum_and_rewards():
         pytest.param(3000, 0.0, id="after-end"),
     ],
 )
-def test_displayport_newton_curriculum_anneals_at_goal_probability(iteration: int, expected_probability: float):
+def test_displayport_newton_curriculum_anneals_at_goal_probability(iteration: int,
+                                                                   expected_probability: float):
     """The optimized reset curriculum must preserve its 256k environment-step horizon."""
     term = object.__new__(reset_plug_at_goal_curriculum)
     term.at_goal_prob = 0.8
@@ -901,7 +949,8 @@ def test_displayport_newton_runner_and_play_preserve_physx_defaults():
     assert physx_runner.obs_groups == {"actor": ["policy"], "critic": ["critic"]}
 
     train_cfg = Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg()
-    play_cfg = Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg_PLAY()
+    play_cfg = Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg()
+    play_cfg.play_mode()
     assert train_cfg.scene.num_envs == 256
     assert train_cfg.sim.use_newton_actuators is True
     assert train_cfg.scene.robot.spawn.func is _spawn_rizon_with_validated_flange_inertia
@@ -912,10 +961,8 @@ def test_displayport_newton_runner_and_play_preserve_physx_defaults():
     assert play_cfg.observations.policy.enable_corruption is False
     assert play_cfg.events.reset_plug_curriculum.params["at_goal_prob"] == pytest.approx(0.0)
     assert play_cfg.events.reset_plug_curriculum.params["at_goal_prob_final"] == pytest.approx(0.0)
-    assert (
-        play_cfg.events.randomize_socket_pose.params["pose_range"]
-        == (train_cfg.events.randomize_socket_pose.params["pose_range"])
-    )
+    assert (play_cfg.events.randomize_socket_pose.params["pose_range"] == (
+        train_cfg.events.randomize_socket_pose.params["pose_range"]))
     assert play_cfg.scene.num_envs == 50
 
     physx_cfg = Rizon4sTaskSpaceDisplayportInsertionEnvCfg()
@@ -927,7 +974,9 @@ def test_displayport_newton_runner_and_play_preserve_physx_defaults():
     assert physx_cfg.decimation == 8
     assert 1.0 / (physx_cfg.sim.dt * physx_cfg.decimation) == pytest.approx(30.0)
     actor = physx_cfg.observations.policy
-    assert _observation_term_names(actor) == ["eef_pos", "eef_rot_6d", "socket_kp_pos", "socket_kp_rot_6d"]
+    assert _observation_term_names(actor) == [
+        "eef_pos", "eef_rot_6d", "socket_kp_pos", "socket_kp_rot_6d"
+    ]
     assert actor.enable_corruption is False
     assert actor.socket_kp_pos.noise is None
     assert tuple(actor.eef_pos.params["offset"]) == pytest.approx((0.0, 0.0, 0.1925))
@@ -935,8 +984,10 @@ def test_displayport_newton_runner_and_play_preserve_physx_defaults():
     nominal_usd_path = FLEXIV_RIZON4S_GRAV_GRIPPER_CFG.spawn.usd_path
     assert physx_cfg.scene.robot.spawn.usd_path == nominal_usd_path
     assert train_cfg.scene.robot.spawn.usd_path == nominal_usd_path
-    assert physx_cfg.events.plug_physics_material.params["static_friction_range"] == pytest.approx((0.001, 0.001))
-    assert physx_cfg.events.robot_physics_material.params["static_friction_range"] == pytest.approx((0.75, 0.75))
+    assert physx_cfg.events.plug_physics_material.params["static_friction_range"] == pytest.approx(
+        (0.001, 0.001))
+    assert physx_cfg.events.robot_physics_material.params[
+        "static_friction_range"] == pytest.approx((0.75, 0.75))
 
 
 def test_osc_leapp_metadata_expands_per_axis_action_scales():

@@ -1,8 +1,25 @@
-# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+# Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Copyright (c) 2022-2026, The Isaac Lab Project Developers
+# (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-
 """Deploy-specific action terms for LEAPP export workflows."""
 
 from __future__ import annotations
@@ -10,32 +27,27 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
+from isaaclab.envs.mdp.actions.joint_actions import RelativeJointPositionAction
+from isaaclab.envs.mdp.actions.task_space_actions import (DifferentialInverseKinematicsAction,
+                                                          OperationalSpaceControllerAction)
+from isaaclab.utils.leapp.leapp_semantics import POSE6_ELEMENT_NAMES
 import torch
 import warp as wp
-
-from isaaclab.envs.mdp.actions.joint_actions import RelativeJointPositionAction
-from isaaclab.envs.mdp.actions.task_space_actions import (
-    DifferentialInverseKinematicsAction,
-    OperationalSpaceControllerAction,
-)
-from isaaclab.utils.leapp.leapp_semantics import POSE6_ELEMENT_NAMES
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
 
-    from .actions_cfg import (
-        DeployDifferentialInverseKinematicsActionCfg,
-        DeployOperationalSpaceControllerActionCfg,
-        DeployRelativeJointPositionActionCfg,
-    )
-
+    from .actions_cfg import (DeployDifferentialInverseKinematicsActionCfg,
+                              DeployOperationalSpaceControllerActionCfg,
+                              DeployRelativeJointPositionActionCfg)
 
 _LEAPP_TRACED_OBSERVATION_INPUTS = "_leapp_traced_observation_inputs"
 _LEAPP_CONSUMED_OBSERVATION_INPUTS = "_leapp_consumed_observation_inputs"
 
 
 def _leapp_real_env(env):
-    real_env = object.__getattribute__(env, "_real_env") if type(env).__name__ == "_EnvProxy" else env
+    real_env = object.__getattribute__(env,
+                                       "_real_env") if type(env).__name__ == "_EnvProxy" else env
     return real_env
 
 
@@ -107,7 +119,8 @@ def _axis_scale_values(scale, *, name: str) -> list[float]:
     if scale_tensor.numel() == 1:
         scale_tensor = scale_tensor.repeat(3)
     elif scale_tensor.numel() != 3:
-        raise ValueError(f"{name} must contain either one or three values; got {scale_tensor.numel()}.")
+        raise ValueError(
+            f"{name} must contain either one or three values; got {scale_tensor.numel()}.")
     if not bool(torch.isfinite(scale_tensor).all()):
         raise ValueError(f"{name} must contain only finite values.")
     return [float(value) for value in scale_tensor.tolist()]
@@ -177,15 +190,16 @@ class DeployRelativeJointPositionAction(RelativeJointPositionAction):
                 if not _is_leapp_observation_input_consumed(self._env, observation_input_name):
                     raise RuntimeError(
                         "DeployRelativeJointPositionAction requires the traced "
-                        f"'{self.cfg.asset_name}_joint_pos' observation during LEAPP export."
-                    )
+                        f"'{self.cfg.asset_name}_joint_pos' observation during LEAPP export.")
                 real_asset = object.__getattribute__(asset, "_real_asset")
-                current_joint_pos = _tensor_data_to_torch(real_asset.data.joint_pos)[:, self._joint_ids]
+                current_joint_pos = _tensor_data_to_torch(
+                    real_asset.data.joint_pos)[:, self._joint_ids]
         else:
             current_joint_pos = _tensor_data_to_torch(asset.data.joint_pos)[:, self._joint_ids]
 
         current_actions = self.processed_actions + current_joint_pos
-        self._asset.set_joint_position_target_index(target=current_actions, joint_ids=self._joint_ids)
+        self._asset.set_joint_position_target_index(target=current_actions,
+                                                    joint_ids=self._joint_ids)
 
 
 class DeployOperationalSpaceControllerAction(OperationalSpaceControllerAction):

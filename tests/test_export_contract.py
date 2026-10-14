@@ -1,12 +1,8 @@
+from isaaclab_training.export.contracts import (get_export_contract, task_space_action_scale,
+                                                TASK_SPACE_EXPORT_MODEL_NAME,
+                                                task_space_policy_obs)
 import pytest
 import torch
-
-from isaaclab_training.export.contracts import (
-    TASK_SPACE_EXPORT_MODEL_NAME,
-    get_export_contract,
-    task_space_action_scale,
-    task_space_policy_obs,
-)
 
 
 def test_task_space_policy_obs_requires_policy_group():
@@ -27,6 +23,7 @@ def test_task_space_policy_obs_returns_policy_tensor():
 
 
 def test_task_space_action_scale_uses_env_cfg_action_scales():
+
     class _Action:
         position_scale = 0.025
         orientation_scale = 0.05

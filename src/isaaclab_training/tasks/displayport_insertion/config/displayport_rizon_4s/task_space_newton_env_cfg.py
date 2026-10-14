@@ -1,8 +1,8 @@
-# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# Copyright (c) 2022-2026, The Isaac Lab Project Developers
+# (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-
 """Newton point-SDF OSC configuration for Rizon 4S DisplayPort insertion.
 
 It is separate from :mod:`task_space_env_cfg` because its checkpoint ABI observes
@@ -11,15 +11,6 @@ the flange origin in a different tensor order than the PhysX task-space policy.
 
 import logging
 import math
-
-from isaaclab_newton.physics import MJWarpSolverCfg, NewtonCfg, NewtonCollisionPipelineCfg, NewtonShapeCfg
-from isaaclab_newton.sim.schemas import (
-    MujocoJointDrivePropertiesCfg,
-    MujocoRigidBodyPropertiesCfg,
-    NewtonCollisionCfg,
-    NewtonSDFCollisionCfg,
-)
-from isaaclab_physx.sim.schemas import PhysxCollisionCfg
 
 from isaaclab.actuators import IdealPDActuatorCfg, ImplicitActuatorCfg
 from isaaclab.controllers.operational_space_cfg import OperationalSpaceControllerCfg
@@ -32,14 +23,17 @@ from isaaclab.sim.spawners.from_files import spawn_from_usd
 from isaaclab.sim.utils import clone
 from isaaclab.utils.configclass import configclass
 from isaaclab.utils.noise import UniformNoiseCfg
-
-import isaaclab_training.mdp as deploy_mdp
-from isaaclab_training.tasks.displayport_insertion.displayport_insertion_env_cfg import (
-    SOCKET_INSERTION_OFFSET,
-    ObservationsCfg,
-)
-from isaaclab_training.mdp.noise_models import ResetSampledConstantNoiseModelCfg
+from isaaclab_newton.physics import (MJWarpSolverCfg, NewtonCfg, NewtonCollisionPipelineCfg,
+                                     NewtonShapeCfg)
+from isaaclab_newton.sim.schemas import (MujocoJointDrivePropertiesCfg,
+                                         MujocoRigidBodyPropertiesCfg, NewtonCollisionCfg,
+                                         NewtonSDFCollisionCfg)
+from isaaclab_physx.sim.schemas import PhysxCollisionCfg
 from isaaclab_tasks.utils import PresetCfg
+import isaaclab_training.mdp as deploy_mdp
+from isaaclab_training.mdp.noise_models import ResetSampledConstantNoiseModelCfg
+from isaaclab_training.tasks.displayport_insertion.displayport_insertion_env_cfg import (
+    ObservationsCfg, SOCKET_INSERTION_OFFSET)
 
 from .task_space_env_cfg import Rizon4sTaskSpaceDisplayportInsertionEnvCfg, TaskSpaceEventCfg
 
@@ -49,20 +43,18 @@ _OSC_ORIENTATION_SCALE = 0.025
 _OSC_STIFFNESS = (300.0, 300.0, 300.0, 30.0, 30.0, 30.0)
 _OSC_DAMPING_RATIO = (1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
 _NEWTON_NUM_ENVS = 256
-# _NEWTON_MAX_TRIANGLE_PAIRS = 2**25
-# Collision / constraint capacities, sized at ~2x the peaks measured over scripted insertion, seated, carry,
-# curriculum resets and policy rollouts: 6.4k triangle pairs / env (mostly the always-on finger-plug grasp),
-# 382 contacts / env and 564 constraint rows / world. MJWarp and Newton drop rows past these limits silently.
+# Each replicated environment is an independent Newton world, so nconmax and njmax are
+# per-world limits and must not be multiplied by scene.num_envs. The measured peaks below cover
+# scripted insertion, seated, carry, curriculum-reset, and policy-rollout scenarios. Keep at
+# least 2x headroom because MJWarp silently drops contacts or constraint rows past these limits.
+_NEWTON_MEASURED_PEAK_CONTACTS_PER_WORLD = 382
+_NEWTON_MEASURED_PEAK_CONSTRAINT_ROWS_PER_WORLD = 612
+_NEWTON_NCONMAX_PER_WORLD = 1024
+_NEWTON_NJMAX_PER_WORLD = 2048
+# Triangle-pair capacity is the exception: Newton owns one scene-wide candidate-pair buffer.
+# Measurements peaked at 6.4k pairs per environment during ordinary scenarios and 8.1k under
+# full-force presses.
 _NEWTON_TRIANGLE_PAIRS_PER_ENV = 12288
-_NEWTON_NCONMAX = 1024
-_NEWTON_NJMAX = 2048
-# Contact detection distance [m] for every shape (detection only, no inflation). It must cover how far surfaces
-# close between collision passes (every 10 substeps = 5 ms). 2 mm halves the grasp's narrow-phase work (5.7k ->
-# 3.2k triangle pairs / env, 1.5-1.9x env throughput) and passes every scripted / reset / eval physics test, but a
-# full training run at 2 mm learned at about half the rate of 5 mm (model_1000 approach-only eval 2.7 % vs 30.1 %,
-# same config and seed; terminal success 0.34 vs 0.67 from iteration 100), so 5 mm stays.
-# _NEWTON_CONTACT_GAP = 0.002
-_NEWTON_CONTACT_GAP = 0.005
 _FLANGE_FALLBACK_DENSITY = 1000.0
 
 _LOGGER = logging.getLogger(__name__)
@@ -81,9 +73,11 @@ def _use_explicit_effort_control_arm_actuators(
         if actuator_velocity_limit is None:
             actuator_velocity_limit = source_cfg.joint_velocity_limit
         if actuator_effort_limit is None or source_cfg.joint_effort_limit is None:
-            raise ValueError(f"Newton OSC arm actuator {actuator_name!r} must define effort limits.")
+            raise ValueError(
+                f"Newton OSC arm actuator {actuator_name!r} must define effort limits.")
         if actuator_velocity_limit is None or source_cfg.joint_velocity_limit is None:
-            raise ValueError(f"Newton OSC arm actuator {actuator_name!r} must define velocity limits.")
+            raise ValueError(
+                f"Newton OSC arm actuator {actuator_name!r} must define velocity limits.")
         env_cfg.scene.robot.actuators[actuator_name] = IdealPDActuatorCfg(
             joint_names_expr=list(source_cfg.joint_names_expr),
             actuator_effort_limit=actuator_effort_limit,
@@ -99,13 +93,15 @@ def _use_explicit_effort_control_arm_actuators(
         )
 
 
-def _uniform_sphere_inertia(mass: float, density: float = _FLANGE_FALLBACK_DENSITY) -> tuple[float, float, float]:
+def _uniform_sphere_inertia(mass: float,
+                            density: float = _FLANGE_FALLBACK_DENSITY
+                            ) -> tuple[float, float, float]:
     """Return the diagonal inertia for a uniform sphere with the given mass."""
     if not math.isfinite(mass) or mass <= 0.0:
         raise ValueError(f"Flange mass must be positive and finite, got {mass!r}.")
     if not math.isfinite(density) or density <= 0.0:
         raise ValueError(f"Fallback density must be positive and finite, got {density!r}.")
-    radius = (3.0 * mass / (4.0 * math.pi * density)) ** (1.0 / 3.0)
+    radius = (3.0 * mass / (4.0 * math.pi * density))**(1.0 / 3.0)
     moment = 0.4 * mass * radius**2
     return (moment, moment, moment)
 
@@ -117,7 +113,8 @@ def _is_valid_diagonal_inertia(diagonal: object) -> bool:
     values = tuple(float(value) for value in diagonal)
     if len(values) != 3 or not all(math.isfinite(value) and value > 0.0 for value in values):
         return False
-    return all(values[index] <= values[(index + 1) % 3] + values[(index + 2) % 3] for index in range(3))
+    return all(values[index] <= values[(index + 1) % 3] + values[(index + 2) % 3]
+               for index in range(3))
 
 
 def _is_valid_principal_axes(quaternion: object) -> bool:
@@ -125,12 +122,16 @@ def _is_valid_principal_axes(quaternion: object) -> bool:
     if quaternion is None:
         return False
     if hasattr(quaternion, "GetReal") and hasattr(quaternion, "GetImaginary"):
-        values = (float(quaternion.GetReal()), *(float(value) for value in quaternion.GetImaginary()))
+        values = (float(quaternion.GetReal()), *(float(value)
+                                                 for value in quaternion.GetImaginary()))
     else:
         values = tuple(float(value) for value in quaternion)
     if len(values) != 4 or not all(math.isfinite(value) for value in values):
         return False
-    return math.isclose(sum(value * value for value in values), 1.0, rel_tol=1.0e-5, abs_tol=1.0e-5)
+    return math.isclose(sum(value * value for value in values),
+                        1.0,
+                        rel_tol=1.0e-5,
+                        abs_tol=1.0e-5)
 
 
 @clone
@@ -157,14 +158,16 @@ def _spawn_rizon_with_validated_flange_inertia(
     principal_axes = mass_api.GetPrincipalAxesAttr().Get()
     if _is_valid_diagonal_inertia(diagonal):
         if not _is_valid_principal_axes(principal_axes):
-            raise ValueError(f"Rizon flange {flange.GetPath()} must have normalized principal axes.")
+            raise ValueError(
+                f"Rizon flange {flange.GetPath()} must have normalized principal axes.")
         return prim
 
     mass = mass_api.GetMassAttr().Get()
     diagonal = _uniform_sphere_inertia(float(mass) if mass is not None else float("nan"))
     mass_api.GetDiagonalInertiaAttr().Set(Gf.Vec3f(*diagonal))
     mass_api.GetPrincipalAxesAttr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
-    _LOGGER.info("Authored deterministic flange inertia %s kg*m^2 for Newton asset %s.", diagonal, cfg.usd_path)
+    _LOGGER.info("Authored deterministic flange inertia %s kg*m^2 for Newton asset %s.", diagonal,
+                 cfg.usd_path)
     return prim
 
 
@@ -176,27 +179,38 @@ def _validate_sdf_meshes(root_prim, relative_paths: tuple[str, ...]) -> None:
     for relative_path in relative_paths:
         mesh_path = f"{root_prim.GetPath()}{relative_path}"
         mesh_prim = root_prim.GetStage().GetPrimAtPath(mesh_path)
-        if not mesh_prim.IsValid() or not mesh_prim.IsA(UsdGeom.Mesh) or not UsdPhysics.CollisionAPI(mesh_prim):
+        if not mesh_prim.IsValid() or not mesh_prim.IsA(
+                UsdGeom.Mesh) or not UsdPhysics.CollisionAPI(mesh_prim):
             missing.append(mesh_path)
     if missing:
-        raise ValueError(f"DisplayPort asset is missing required colliding SDF meshes: {missing!r}.")
+        raise ValueError(
+            f"DisplayPort asset is missing required colliding SDF meshes: {missing!r}.")
 
 
 @clone
-def _spawn_plug_with_validated_sdf_meshes(prim_path: str, cfg, translation=None, orientation=None, **kwargs):
+def _spawn_plug_with_validated_sdf_meshes(prim_path: str,
+                                          cfg,
+                                          translation=None,
+                                          orientation=None,
+                                          **kwargs):
     """Spawn the plug and validate the point-SDF mesh contract."""
     prim = spawn_from_usd(prim_path, cfg, translation, orientation, **kwargs)
-    _validate_sdf_meshes(prim, ("/collision_mesh",))
+    _validate_sdf_meshes(prim, ("/collision_mesh", ))
     return prim
 
 
 @clone
-def _spawn_socket_with_validated_sdf_meshes(prim_path: str, cfg, translation=None, orientation=None, **kwargs):
+def _spawn_socket_with_validated_sdf_meshes(prim_path: str,
+                                            cfg,
+                                            translation=None,
+                                            orientation=None,
+                                            **kwargs):
     """Spawn the socket and validate the point-SDF mesh contract."""
     prim = spawn_from_usd(prim_path, cfg, translation, orientation, **kwargs)
     _validate_sdf_meshes(
         prim,
-        tuple(f"/tn__2584N111_DisplayportCord_jP/Body{body_id}/Mesh" for body_id in (5, 6, 8, 12, 13)),
+        tuple(f"/tn__2584N111_DisplayportCord_jP/Body{body_id}/Mesh"
+              for body_id in (5, 6, 8, 12, 13)),
     )
     return prim
 
@@ -212,8 +226,7 @@ def _newton_sdf_properties(
     }
     for prim_path in sdf_prim_paths:
         properties[prim_path] = [
-            # NewtonCollisionCfg(contact_margin=0.0, contact_gap=0.005),
-            NewtonCollisionCfg(contact_margin=0.0, contact_gap=_NEWTON_CONTACT_GAP),
+            NewtonCollisionCfg(contact_margin=0.0, contact_gap=0.005),
             NewtonSDFCollisionCfg(
                 sdf_max_resolution=256,
                 sdf_narrow_band_inner=-0.005,
@@ -235,10 +248,8 @@ class DisplayportNewtonPhysicsCfg(PresetCfg):
         solver_cfg=MJWarpSolverCfg(
             solver="newton",
             integrator="implicitfast",
-            # njmax=8192,
-            # nconmax=8192,
-            njmax=_NEWTON_NJMAX,
-            nconmax=_NEWTON_NCONMAX,
+            njmax=_NEWTON_NJMAX_PER_WORLD,
+            nconmax=_NEWTON_NCONMAX_PER_WORLD,
             iterations=100,
             ls_iterations=50,
             update_data_interval=10,
@@ -257,8 +268,7 @@ class DisplayportNewtonPhysicsCfg(PresetCfg):
         ),
         num_substeps=20,
         collision_decimation=10,
-        # default_shape_cfg=NewtonShapeCfg(gap=0.005),
-        default_shape_cfg=NewtonShapeCfg(gap=_NEWTON_CONTACT_GAP),
+        default_shape_cfg=NewtonShapeCfg(gap=0.005),
         debug_mode=False,
         use_cuda_graph=True,
     )
@@ -275,18 +285,27 @@ class NewtonTaskSpaceObservationsCfg:
 
         socket_pos = ObsTerm(
             func=deploy_mdp.rigid_object_pos_w,
-            params={"asset_cfg": SceneEntityCfg("dp_socket"), "offset": SOCKET_INSERTION_OFFSET},
+            params={
+                "asset_cfg": SceneEntityCfg("dp_socket"),
+                "offset": SOCKET_INSERTION_OFFSET
+            },
             noise=ResetSampledConstantNoiseModelCfg(
-                noise_cfg=UniformNoiseCfg(n_min=-0.01, n_max=0.01, operation="add")
-            ),
+                noise_cfg=UniformNoiseCfg(n_min=-0.01, n_max=0.01, operation="add")),
         )
         tool_pos = ObsTerm(
             func=deploy_mdp.eef_pos_w,
-            params={"asset_cfg": SceneEntityCfg("robot"), "body_name": "flange", "offset": [0.0, 0.0, 0.0]},
+            params={
+                "asset_cfg": SceneEntityCfg("robot"),
+                "body_name": "flange",
+                "offset": [0.0, 0.0, 0.0]
+            },
         )
         tool_rot_6d = ObsTerm(
             func=deploy_mdp.eef_rot_6d_w,
-            params={"asset_cfg": SceneEntityCfg("robot"), "body_name": "flange"},
+            params={
+                "asset_cfg": SceneEntityCfg("robot"),
+                "body_name": "flange"
+            },
         )
         socket_rot_6d = ObsTerm(
             func=deploy_mdp.rigid_object_rot_6d_w,
@@ -335,7 +354,7 @@ class Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg(Rizon4sTaskSpaceDisplaypo
     """
 
     newton_triangle_pairs_per_env: int | None = _NEWTON_TRIANGLE_PAIRS_PER_ENV
-    """Narrow-phase triangle-pair capacity per environment; the scene-wide buffer is this x num_envs."""
+    """Narrow-phase triangle-pair capacity per environment; scene-wide buffer = this x num_envs."""
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -357,17 +376,26 @@ class Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg(Rizon4sTaskSpaceDisplaypo
         # Preserve source PhysX offsets on every collider, but apply Newton's
         # point-SDF schema only to meshes authored for SDF collision.
         self.scene.robot.spawn.func = _spawn_rizon_with_validated_flange_inertia
+        # The PhysX profile replaces selected colliders with simplified hulls and removes the
+        # corresponding source meshes. Newton instead needs the original point-SDF meshes listed
+        # below, so undo every inherited collider-pruning/replacement directive before spawning.
+        for asset_cfg in (self.scene.dp_plug, self.scene.dp_socket):
+            asset_cfg.spawn.remove_disabled_colliders = False
+            asset_cfg.spawn.collision_parts_file = None
+            asset_cfg.spawn.collision_parts_template = None
+            asset_cfg.spawn.remove_colliders = ()
         self.scene.dp_plug.spawn.func = _spawn_plug_with_validated_sdf_meshes
         self.scene.dp_socket.spawn.func = _spawn_socket_with_validated_sdf_meshes
         self.scene.dp_plug.spawn.collision_props = _newton_sdf_properties(
             0.00001,
             -0.00005,
-            ("/collision_mesh",),
+            ("/collision_mesh", ),
         )
         self.scene.dp_socket.spawn.collision_props = _newton_sdf_properties(
             0.0001,
             -0.0001,
-            tuple(f"/tn__2584N111_DisplayportCord_jP/Body{body_id}/Mesh" for body_id in (5, 6, 8, 12, 13)),
+            tuple(f"/tn__2584N111_DisplayportCord_jP/Body{body_id}/Mesh"
+                  for body_id in (5, 6, 8, 12, 13)),
         )
 
         self.observations = NewtonTaskSpaceObservationsCfg()
@@ -410,7 +438,8 @@ class Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg(Rizon4sTaskSpaceDisplaypo
         # Newton cancels robot-body gravity directly. OSC gravity compensation
         # stays disabled to avoid applying gravity twice.
         self.scene.robot.spawn.rigid_props = MujocoRigidBodyPropertiesCfg(gravcomp=1.0)
-        self.scene.robot.spawn.joint_drive_props = MujocoJointDrivePropertiesCfg(actuatorgravcomp=False)
+        self.scene.robot.spawn.joint_drive_props = MujocoJointDrivePropertiesCfg(
+            actuatorgravcomp=False)
         _use_explicit_effort_control_arm_actuators(self)
 
         self.scene.robot.actuators["gripper_drive"] = ImplicitActuatorCfg(
@@ -434,15 +463,9 @@ class Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg(Rizon4sTaskSpaceDisplaypo
         self.hand_hold_width = -0.1
         self.hand_close_width = -0.1
 
-
-@configclass
-class Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg_PLAY(Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg):
-    """Deterministic play configuration for a trained Newton OSC policy."""
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        self.scene.num_envs = 50
+    def play_mode(self) -> None:
+        """Apply deterministic playback overrides to the Newton training profile."""
+        super().play_mode()
         self.scene.env_spacing = 2.5
-        self.observations.policy.enable_corruption = False
         self.events.reset_plug_curriculum.params["at_goal_prob"] = 0.0
         self.events.reset_plug_curriculum.params["at_goal_prob_final"] = 0.0

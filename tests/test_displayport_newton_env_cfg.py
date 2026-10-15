@@ -874,7 +874,7 @@ def test_displayport_newton_domain_randomization_curriculum_and_rewards():
     assert curriculum["at_goal_prob"] == pytest.approx(0.8)
     assert curriculum["at_goal_prob_final"] == pytest.approx(0.0)
     assert curriculum["anneal_start_iter"] == pytest.approx(0.0)
-    assert curriculum["anneal_end_iter"] == pytest.approx(2000.0)
+    assert curriculum["anneal_end_iter"] == pytest.approx(500.0)
     assert curriculum["num_steps_per_env"] == 128
     assert curriculum["insertion_axis"] == pytest.approx([1.0, 0.0, 0.0])
     assert curriculum["insertion_length"] == pytest.approx(0.011)
@@ -936,11 +936,11 @@ def test_displayport_newton_runner_and_play_preserve_physx_defaults():
     physx_runner = Rizon4sGravDisplayportInsertionRNNPPORunnerCfg()
     task_space_runner = Rizon4sGravDisplayportInsertionTaskSpaceRNNPPORunnerCfg()
     assert newton_runner.seed == 123
-    assert newton_runner.max_iterations == 4000
+    assert newton_runner.max_iterations == 1500
     assert newton_runner.experiment_name == "displayport_insertion_rizon4s_newton_osc"
     assert physx_runner.max_iterations == 1500
     assert physx_runner.experiment_name == "displayport_insertion_rizon4s"
-    assert task_space_runner.max_iterations == 6000
+    assert task_space_runner.max_iterations == 1000
     assert task_space_runner.num_steps_per_env == 128
     assert newton_runner.num_steps_per_env == 128
     assert physx_runner.num_steps_per_env == 512

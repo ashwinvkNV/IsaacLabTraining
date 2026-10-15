@@ -370,6 +370,8 @@ class Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg(Rizon4sTaskSpaceDisplaypo
         # The scene-wide triangle-pair capacity follows the final env count
         # (newton_triangle_pairs_per_env); nconmax / njmax are per world.
         self.scene.num_envs = _NEWTON_NUM_ENVS
+        # Newton trains 1,500 iterations at 256 envs/GPU; anneal over the first third.
+        self.events.reset_plug_curriculum.params["anneal_end_iter"] = 500.0
         self.decimation = 3
         self.sim.render_interval = self.decimation
 

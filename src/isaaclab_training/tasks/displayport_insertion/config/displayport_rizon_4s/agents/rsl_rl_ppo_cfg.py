@@ -30,7 +30,8 @@ _BASE_NUM_STEPS_PER_ENV = 512
 _BASE_MAX_ITERATIONS = 1500
 _BASE_SAVE_INTERVAL = 50
 TASK_SPACE_NUM_STEPS_PER_ENV = 128
-TASK_SPACE_MAX_ITERATIONS = 1500
+TASK_SPACE_MAX_ITERATIONS = 1000
+NEWTON_MAX_ITERATIONS = 1500
 
 
 @configclass
@@ -98,4 +99,5 @@ class Rizon4sGravDisplayportInsertionNewtonRNNPPORunnerCfg(
     """RSL-RL runner for the Newton task-space training profile."""
 
     seed = 123
+    max_iterations = NEWTON_MAX_ITERATIONS
     experiment_name = "displayport_insertion_rizon4s_newton_osc"

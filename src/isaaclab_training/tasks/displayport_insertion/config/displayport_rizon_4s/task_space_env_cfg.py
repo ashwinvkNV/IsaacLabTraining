@@ -85,8 +85,8 @@ _SEAT_OFFSET = [0.00184, 0.0, -0.0006]
 # Shallowest at-goal spawn along the insertion axis, measured from the socket keypoint [m].
 _AT_GOAL_MAX_DEPTH = 0.015
 
-# At-goal anneal length, in env steps: the first 500 of the 1,500 default 128-step iterations.
-_AT_GOAL_ANNEAL_ENV_STEPS = 500 * 128
+# At-goal anneal length, in env steps: the first 333 of the 1,000 default 128-step iterations.
+_AT_GOAL_ANNEAL_ENV_STEPS = 333 * 128
 
 # Plug/socket solver position iterations. PhysX GPU runs the highest count in the scene for every
 # body,

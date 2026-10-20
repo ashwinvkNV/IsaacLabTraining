@@ -192,6 +192,46 @@ uv run isaaclab play --rl_library rsl_rl \
 `physics=newton_sdf` selects Newton physics; a visualizer value never selects a
 physics backend.
 
+#### Experimental FeatherPGS profile
+
+MJWarp remains the supported default. This branch also exposes the explicitly
+selected `physics=feather_pgs` profile for controlled solver experiments. Run a
+finite optimizer smoke before submitting a distributed job:
+
+```bash
+uv run isaaclab train --rl_library rsl_rl \
+  --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-ROS-Inference \
+  --num_envs 16 --max_iterations 1 --seed 123 \
+  --visualizer none \
+  physics=feather_pgs
+```
+
+```bash
+uv run isaaclab train_multigpu --num_gpus 4 \
+  --rl_library rsl_rl \
+  --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-ROS-Inference \
+  --num_envs 256 --seed 123 \
+  --visualizer none \
+  physics=feather_pgs
+```
+
+The profile uses the PhysX-aligned 240 Hz simulation tick, 30 Hz policy rate,
+128 matrix-free PGS iterations, point-SDF contacts, CUDA graphs, 384 dense rows,
+and 2,048 matrix-free rows per world. This is not a pure solver-only A/B:
+FeatherPGS needs solver-specific gravity compensation, friction coefficient
+mapping, contact-offset handling, and gripper settings. PPO, rewards,
+curriculum, assets, observations, and policy actions are otherwise unchanged.
+
+For reproducibility, this experiment pins Isaac Lab at `a333a5fa898e` and the
+last validated FeatherPGS fork at `65ab4b7973fa`. That pair was originally
+validated with Isaac Sim 6.0.1, but its current package metadata is incompatible
+with Isaac Sim 6.0.1's pinned `typing-extensions`; this repository therefore
+retains its resolvable Isaac Sim 6.1 dependency and requires the runtime gates
+above before training. The mutable `fpgs-main` branch now resolves to Newton 1.8
+development code, where `SolverFeatherPGS` was renamed to `SolverSteel` and its
+configuration API changed. Do not advance those pins until Isaac Lab's solver
+manager and this profile are ported and revalidated.
+
 > **Checkpoint compatibility:** the Newton actor consumes socket position first
 > and observes the raw flange pose. The PhysX task-space actor consumes the TCP
 > pose first. Both inputs contain 18 values, so a mismatched checkpoint can load

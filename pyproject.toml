@@ -34,7 +34,7 @@ leapp = ["leapp==0.6.1"]
 sim = ["isaacsim[all,extscache]==6.1.0.0"]
 
 [tool.uv.sources]
-isaaclab = { git = "https://github.com/isaac-sim/IsaacLab.git", rev = "a8b4da3c29ae528b39d4b3c9444d782ce58d886d", subdirectory = "tools/wheel_builder" }
+isaaclab = { git = "https://github.com/shauryadNv/IsaacLab.git", rev = "a333a5fa898e9d8be8b615bda08ee44fa3956637", subdirectory = "tools/wheel_builder" }
 torch = [
   { index = "pytorch-cu128", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
   { index = "pytorch-cu130", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
@@ -74,7 +74,7 @@ prerelease = "allow"
 override-dependencies = [
   "mujoco>=3.12.0,<3.13.dev0",
   "mujoco-warp>=3.12.0,<3.13.dev0",
-  "newton[sim]==1.6.0",
+  "newton[sim] @ git+https://github.com/dylanturpin/newton-collab.git@65ab4b7973fafa81f6e17615600d2aae708b94e6",
   "newton-usd-schemas>=0.5.0",
   "torch==2.11.0",
   "torchvision==0.26.0",

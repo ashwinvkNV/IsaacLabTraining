@@ -167,6 +167,46 @@ fail before training. Requalify any materially changed calibrated asset. Repeat 
 playing or exporting this checkpoint. Newton and PhysX task-space
 checkpoints are not interchangeable even though both actor inputs contain 18 values.
 
+### Experimental FeatherPGS solver
+
+The Newton task keeps MJWarp as its default. On the FPGS experiment branch,
+select the alternative profile explicitly and run a bounded smoke first:
+
+```bash
+uv run isaaclab train --rl_library rsl_rl \
+  --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-ROS-Inference \
+  --num_envs 16 --max_iterations 1 --seed 123 \
+  --visualizer none \
+  physics=feather_pgs
+```
+
+After the smoke passes, use the same command shape as the MJWarp distributed
+run, replacing only the physics selection:
+
+```bash
+uv run isaaclab train_multigpu --num_gpus 4 \
+  --rl_library rsl_rl \
+  --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-ROS-Inference \
+  --num_envs 256 --seed 123 \
+  --visualizer none \
+  physics=feather_pgs
+```
+
+The profile uses a 240 Hz simulation tick, 30 Hz policy rate, 128 matrix-free
+PGS iterations, point-SDF collision, and CUDA graphs. Its validated capacities
+are 384 dense and 2,048 matrix-free constraint rows per world. It also applies
+the FeatherPGS-specific gravity, friction, contact-offset, and gripper mappings,
+so this comparison is not a pure solver-only A/B. All policy-facing task
+contracts remain unchanged.
+
+This branch intentionally uses the immutable Newton fork commit
+`65ab4b7973fa`. The historical stack used Isaac Sim 6.0.1, but that release's
+`typing-extensions` pin conflicts with the required Isaac Lab commit's current
+metadata. This repository retains its resolvable Isaac Sim 6.1 dependency, so
+the runtime gates above are mandatory. Current `fpgs-main` renamed the solver to
+Steel and changed its configuration API; it requires a separate Isaac Lab
+manager port before use.
+
 Joint-space training is also packaged:
 
 ```bash

@@ -939,6 +939,50 @@ applied to an overridden USD. Invalid mass or principal axes, a missing flange, 
 meshes fail before training; valid calibrated inertia is never overwritten. Requalify any materially changed robot asset because full
 inertial decoupling consumes its mass matrix.
 
+Experimental FeatherPGS Profile
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+MJWarp remains the supported Newton default. The FPGS experiment branch adds
+an explicit ``physics=feather_pgs`` profile. Run a finite smoke before a full
+job:
+
+.. code-block:: bash
+
+    uv run isaaclab train --rl_library rsl_rl \
+        --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-ROS-Inference \
+        --num_envs 16 --max_iterations 1 --seed 123 \
+        --visualizer none \
+        physics=feather_pgs
+
+After the smoke passes, launch the distributed experiment with the same task
+and policy settings:
+
+.. code-block:: bash
+
+    uv run isaaclab train_multigpu --num_gpus 4 \
+        --rl_library rsl_rl \
+        --task IsaacTraining-DisplayPortInsertion-Rizon4s-TaskSpace-Newton-ROS-Inference \
+        --num_envs 256 --seed 123 \
+        --visualizer none \
+        physics=feather_pgs
+
+The profile uses a 240 Hz outer tick, a 30 Hz policy rate, 128 matrix-free PGS
+iterations, point-SDF collision, CUDA graphs, 384 dense rows, and 2,048
+matrix-free rows per world. It also uses FeatherPGS-specific gravity
+compensation, pair-friction mapping, contact-offset handling, and gripper
+settings. Consequently, this is a controlled backend comparison, not a pure
+solver-only A/B. PPO, rewards, curriculum, assets, observations, and policy
+actions remain unchanged.
+
+The experiment intentionally pins Isaac Lab ``a333a5fa898e`` and the validated
+Newton fork ``65ab4b7973fa``. The historical stack used Isaac Sim 6.0.1, but
+that release's ``typing-extensions`` pin conflicts with the required Isaac Lab
+commit's current metadata. This repository retains its resolvable Isaac Sim 6.1
+dependency, so the runtime gates above are mandatory. Current ``fpgs-main`` is
+Newton 1.8 development code: it renamed ``SolverFeatherPGS`` to
+``SolverSteel`` and changed the solver configuration API. Port and revalidate
+the Isaac Lab manager before advancing those pins.
+
 .. important::
 
    **Newton and PhysX task-space checkpoints are not interchangeable.** The Newton actor's flat observation ABI

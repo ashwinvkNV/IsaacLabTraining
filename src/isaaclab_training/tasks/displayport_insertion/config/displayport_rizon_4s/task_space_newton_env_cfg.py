@@ -9,10 +9,14 @@ It is separate from :mod:`task_space_env_cfg` because its checkpoint ABI observe
 the flange origin in a different tensor order than the PhysX task-space policy.
 """
 
+from __future__ import annotations
+
 import logging
 import math
+from typing import TYPE_CHECKING
 
-from isaaclab_newton.physics import MJWarpSolverCfg, NewtonCfg, NewtonCollisionPipelineCfg, NewtonShapeCfg
+import torch
+from isaaclab_newton.physics import MJWarpSolverCfg, NewtonCfg, NewtonCollisionPipelineCfg, NewtonShapeCfg, VBDSolverCfg
 from isaaclab_newton.sim.schemas import (
     MujocoJointDrivePropertiesCfg,
     MujocoRigidBodyPropertiesCfg,
@@ -28,6 +32,7 @@ from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import SceneEntityCfg
+from isaaclab.sim.schemas import RigidBodyBaseCfg
 from isaaclab.sim.spawners.from_files import spawn_from_usd
 from isaaclab.sim.utils import clone
 from isaaclab.utils.configclass import configclass
@@ -39,9 +44,12 @@ from isaaclab_training.tasks.displayport_insertion.displayport_insertion_env_cfg
     ObservationsCfg,
 )
 from isaaclab_training.mdp.noise_models import ResetSampledConstantNoiseModelCfg
-from isaaclab_tasks.utils import PresetCfg
+from isaaclab_tasks.utils import PresetCfg, preset
 
 from .task_space_env_cfg import Rizon4sTaskSpaceDisplayportInsertionEnvCfg, TaskSpaceEventCfg
+
+if TYPE_CHECKING:
+    from isaaclab.envs import ManagerBasedEnv
 
 _ARM_JOINTS = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7"]
 _OSC_POSITION_SCALE = (0.025, 0.025, 0.010)
@@ -50,9 +58,36 @@ _OSC_STIFFNESS = (300.0, 300.0, 300.0, 30.0, 30.0, 30.0)
 _OSC_DAMPING_RATIO = (1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
 _NEWTON_NUM_ENVS = 256
 _NEWTON_MAX_TRIANGLE_PAIRS = 2**25
+_VBD_BODY_CONTACT_BUFFER_SIZE = 1024
 _FLANGE_FALLBACK_DENSITY = 1000.0
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _compensate_articulation_body_gravity(
+    env: ManagerBasedEnv,
+    env_ids: torch.Tensor | None,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    gravity: tuple[float, float, float] = (0.0, 0.0, -9.81),
+) -> None:
+    """Cancel gravity on articulation bodies for solvers without MuJoCo gravcomp."""
+    asset = env.scene[asset_cfg.name]
+    if env_ids is None:
+        env_ids = torch.arange(asset.num_instances, device=asset.device, dtype=torch.int32)
+    else:
+        env_ids = env_ids.to(device=asset.device, dtype=torch.int32)
+
+    body_mass = asset.data.body_mass.torch[env_ids]
+    if asset_cfg.body_ids is not None:
+        body_mass = body_mass[:, asset_cfg.body_ids]
+    gravity_w = torch.tensor(gravity, device=asset.device, dtype=body_mass.dtype)
+    forces_w = -body_mass.unsqueeze(-1) * gravity_w
+    asset.permanent_wrench_composer.add_forces_and_torques_index(
+        forces=forces_w,
+        body_ids=asset_cfg.body_ids,
+        env_ids=env_ids,
+        is_global=True,
+    )
 
 
 def _use_explicit_effort_control_arm_actuators(
@@ -244,6 +279,24 @@ class DisplayportNewtonPhysicsCfg(PresetCfg):
         debug_mode=False,
         use_cuda_graph=True,
     )
+    newton_vbd: NewtonCfg = NewtonCfg(
+        solver_cfg=VBDSolverCfg(
+            iterations=20,
+            rigid_compliant_alm=True,
+            rigid_contact_history=True,
+            rigid_body_contact_buffer_size=_VBD_BODY_CONTACT_BUFFER_SIZE,
+        ),
+        collision_cfg=NewtonCollisionPipelineCfg(
+            reduce_contacts=True,
+            contact_matching="latest",
+            max_triangle_pairs=_NEWTON_MAX_TRIANGLE_PAIRS,
+        ),
+        num_substeps=40,
+        collision_decimation=1,
+        default_shape_cfg=NewtonShapeCfg(gap=0.005, ke=2500.0, kd=50.0),
+        debug_mode=False,
+        use_cuda_graph=True,
+    )
     default: NewtonCfg = newton_sdf
 
 
@@ -302,6 +355,15 @@ class NewtonTaskSpaceEventCfg(TaskSpaceEventCfg):
     # OSC is torque controlled, so position-controller gain randomization is
     # intentionally disabled while joint-friction randomization remains active.
     randomize_arm_pd_gains: EventTerm | None = None
+
+    robot_body_gravity_compensation = preset(
+        default=None,
+        newton_vbd=EventTerm(
+            func=_compensate_articulation_body_gravity,
+            mode="reset",
+            params={"asset_cfg": SceneEntityCfg("robot")},
+        ),
+    )
 
 
 @configclass
@@ -376,20 +438,29 @@ class Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg(Rizon4sTaskSpaceDisplaypo
             orientation_scale=_OSC_ORIENTATION_SCALE,
         )
 
-        # Retain the fully wired base events and replace only Newton-specific
-        # randomization terms. Replacing the group would duplicate grasp wiring.
+        # Retain the fully wired grasp reset while adding Newton-only events.
+        # The subclass owns the same base event fields, so replacing the group
+        # does not change reward, curriculum, or domain-randomization behavior.
+        grasp_reset = self.events.set_robot_to_grasp_pose
         newton_events = NewtonTaskSpaceEventCfg()
-        self.events.randomize_arm_joint_friction = newton_events.randomize_arm_joint_friction
-        self.events.randomize_arm_pd_gains = None
+        newton_events.set_robot_to_grasp_pose = grasp_reset
+        self.events = newton_events
         self.events.plug_physics_material.params["static_friction_range"] = (3.0, 3.0)
         self.events.plug_physics_material.params["dynamic_friction_range"] = (3.0, 3.0)
         self.events.robot_physics_material.params["static_friction_range"] = (1.0, 1.0)
         self.events.robot_physics_material.params["dynamic_friction_range"] = (1.0, 1.0)
 
-        # Newton cancels robot-body gravity directly. OSC gravity compensation
-        # stays disabled to avoid applying gravity twice.
-        self.scene.robot.spawn.rigid_props = MujocoRigidBodyPropertiesCfg(gravcomp=1.0)
-        self.scene.robot.spawn.joint_drive_props = MujocoJointDrivePropertiesCfg(actuatorgravcomp=False)
+        # MJWarp consumes body gravcomp directly. Full-scene VBD keeps world
+        # gravity active and receives an equal-and-opposite body force from its
+        # reset event because it does not consume MuJoCo gravcomp metadata.
+        self.scene.robot.spawn.rigid_props = preset(
+            default=MujocoRigidBodyPropertiesCfg(gravcomp=1.0),
+            newton_vbd=RigidBodyBaseCfg(disable_gravity=False),
+        )
+        self.scene.robot.spawn.joint_drive_props = preset(
+            default=MujocoJointDrivePropertiesCfg(actuatorgravcomp=False),
+            newton_vbd=None,
+        )
         _use_explicit_effort_control_arm_actuators(self)
 
         self.scene.robot.actuators["gripper_drive"] = ImplicitActuatorCfg(

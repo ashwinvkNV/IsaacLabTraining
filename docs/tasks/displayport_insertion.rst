@@ -939,6 +939,42 @@ applied to an overridden USD. Invalid mass or principal axes, a missing flange, 
 meshes fail before training; valid calibrated inertia is never overwritten. Requalify any materially changed robot asset because full
 inertial decoupling consumes its mass matrix.
 
+Experimental VBD solver profile
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Select the full-scene VBD experiment explicitly with ``physics=newton_vbd``.
+MJWarp remains the default. The VBD selection retains the same observations,
+actions, PPO configuration, reward, assets, and reset curriculum while changing
+the solver and its gravity-compensation plumbing. Its initial profile uses
+compliant ALM, contact history with ``latest`` matching, 20 iterations, 40
+substeps per 10 ms outer tick, collision every substep, a 5 mm point-SDF gap,
+and default contact stiffness/damping of 2500 N/m and 50 N*s/m. CUDA graph
+capture is enabled.
+
+This experiment branch pins IsaacLab commit
+``4db894c4088075379f6c8508073b83090c3b6ecb`` and Newton main commit
+``aad887137c1e55c4307d083daad8d19785a0bebe``. The production branch remains
+the source of the exact Newton 1.6 MJWarp control; although MJWarp is still the
+default preset here, it runs with the experiment branch's newer Newton package.
+
+Treat this as a physics experiment rather than a deployable policy profile. Run
+the following gates in order on the exact build and assets intended for
+training:
+
+#. Run the focused Newton configuration tests.
+#. In one environment, hold a pre-inserted plug at rest and verify that contact,
+   pose, and grasp state remain bounded.
+#. Execute a scripted insertion with the robot holding the plug and inspect
+   contact, orientation, drop, and watchdog metrics.
+#. Run an 8--16 environment, 6--10 iteration diagnostic with synchronous CUDA
+   error reporting.
+#. Scale through 64, 128, and 256 environments while recording collision and
+   per-body contact-capacity watermarks.
+
+Only submit full training after every gate remains stable. Qualify resulting
+checkpoints separately in simulation and on hardware before export or
+deployment.
+
 .. important::
 
    **Newton and PhysX task-space checkpoints are not interchangeable.** The Newton actor's flat observation ABI

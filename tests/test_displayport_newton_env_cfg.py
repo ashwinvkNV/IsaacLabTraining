@@ -19,7 +19,7 @@ from isaaclab.managers import ObservationTermCfg, SceneEntityCfg
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.utils.noise import UniformNoiseCfg
 from isaaclab_assets import FLEXIV_RIZON4S_GRAV_GRIPPER_CFG
-from isaaclab_newton.physics import MJWarpSolverCfg, NewtonCfg
+from isaaclab_newton.physics import MJWarpSolverCfg, NewtonCfg, VBDSolverCfg
 from isaaclab_newton.sim.schemas import NewtonCollisionCfg, NewtonSDFCollisionCfg
 from isaaclab_physx.physics import PhysxCfg
 from isaaclab_physx.sim.schemas import PhysxCollisionCfg
@@ -664,9 +664,61 @@ def test_displayport_newton_timing_solver_and_point_sdf_assets():
             assert sdf.hydroelastic_stiffness == pytest.approx(1.0e8)
 
 
+def test_displayport_newton_vbd_preset_has_stability_profile():
+    """The opt-in VBD preset must retain the reviewed solver and contact contract."""
+    cfg = resolve_presets(Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg(), selected=("newton_vbd",))
+    physics = cfg.sim.physics
+
+    assert isinstance(physics, NewtonCfg)
+    assert physics.num_substeps == 40
+    assert physics.collision_decimation == 1
+    assert physics.num_substeps / cfg.sim.dt == pytest.approx(4000.0)
+    assert physics.num_substeps / cfg.sim.dt / physics.collision_decimation == pytest.approx(4000.0)
+    assert physics.use_cuda_graph is True
+    assert physics.default_shape_cfg.gap == pytest.approx(0.005)
+    assert physics.default_shape_cfg.ke == pytest.approx(2500.0)
+    assert physics.default_shape_cfg.kd == pytest.approx(50.0)
+
+    solver = physics.solver_cfg
+    assert isinstance(solver, VBDSolverCfg)
+    assert solver.iterations == 20
+    assert solver.rigid_compliant_alm is True
+    assert solver.rigid_contact_history is True
+    assert solver.rigid_body_contact_buffer_size >= 1024
+
+    collision = physics.collision_cfg
+    assert collision is not None
+    assert collision.reduce_contacts is True
+    assert collision.contact_matching == "latest"
+    assert collision.max_triangle_pairs == 2**25
+    assert cfg.events.robot_body_gravity_compensation is not None
+    assert cfg.scene.robot.spawn.rigid_props.disable_gravity is False
+    assert cfg.scene.robot.spawn.joint_drive_props is None
+
+
+def test_displayport_newton_vbd_preserves_policy_task_contract():
+    """Selecting VBD must change physics plumbing without changing the policy task."""
+    mjwarp_cfg = resolve_presets(Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg(), selected=("newton_sdf",))
+    vbd_cfg = resolve_presets(Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg(), selected=("newton_vbd",))
+
+    assert isinstance(mjwarp_cfg.sim.physics.solver_cfg, MJWarpSolverCfg)
+    assert isinstance(vbd_cfg.sim.physics.solver_cfg, VBDSolverCfg)
+    assert mjwarp_cfg.task_space_obs_order == vbd_cfg.task_space_obs_order
+    assert mjwarp_cfg.observations.to_dict() == vbd_cfg.observations.to_dict()
+    assert mjwarp_cfg.actions.to_dict() == vbd_cfg.actions.to_dict()
+    assert mjwarp_cfg.rewards.to_dict() == vbd_cfg.rewards.to_dict()
+    assert mjwarp_cfg.events.reset_plug_curriculum.to_dict() == vbd_cfg.events.reset_plug_curriculum.to_dict()
+    assert mjwarp_cfg.scene.dp_plug.spawn.usd_path == vbd_cfg.scene.dp_plug.spawn.usd_path
+    assert mjwarp_cfg.scene.dp_socket.spawn.usd_path == vbd_cfg.scene.dp_socket.spawn.usd_path
+    assert (
+        Rizon4sGravDisplayportInsertionNewtonRNNPPORunnerCfg().to_dict()
+        == Rizon4sGravDisplayportInsertionNewtonRNNPPORunnerCfg().to_dict()
+    )
+
+
 def test_displayport_newton_osc_abi_robot_and_gravity_settings():
     """OSC must command flange-relative pose deltas without double gravity compensation."""
-    cfg = Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg()
+    cfg = resolve_presets(Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg(), selected=("newton_sdf",))
     action = cfg.actions.arm_action
 
     assert isinstance(action, DeployOperationalSpaceControllerActionCfg)

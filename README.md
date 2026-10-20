@@ -148,7 +148,7 @@ uv run isaaclab train_multigpu --num_gpus 4 \
   physics=newton_sdf
 ```
 
-The recommended fixed profile uses stable Newton 1.6, the MJWarp solver,
+The production fixed profile uses stable Newton 1.6 and the MJWarp solver,
 point-SDF contacts with a 5 mm gap, a 2 kHz solver rate, a 200 Hz collision
 refresh rate, and a 33.3 Hz policy rate. It uses torque-level OSC with full
 inertial-dynamics decoupling, stiffness `[300, 300, 300, 30, 30, 30]`, damping
@@ -158,6 +158,39 @@ configured solver velocity limits; OSC remains the joint-effort source. Socket-p
 is sampled from +/-10 mm once per episode, and the at-goal reset probability is
 annealed from `0.8` to `0` over the first 500 iterations. Use 256 environments
 per distributed rank; a four-rank job therefore trains 1,024 environments.
+
+#### Experimental VBD profile
+
+`physics=newton_vbd` selects an opt-in full-scene VBD experiment. It does not
+change the default MJWarp profile, policy observations or actions, PPO setup,
+reward, assets, or curriculum. The initial VBD profile uses compliant ALM with
+contact history and latest-contact matching, 20 iterations, a 4 kHz solver and
+collision refresh, a 5 mm point-SDF gap, and 2500 N/m contact stiffness with
+50 N*s/m damping. CUDA graph capture remains enabled.
+
+This experiment branch pins IsaacLab at
+`4db894c4088075379f6c8508073b83090c3b6ecb` and Newton main at
+`aad887137c1e55c4307d083daad8d19785a0bebe`. The MJWarp preset remains the
+default configuration, but the exact Newton 1.6 production control belongs on
+the production branch because this branch evaluates a newer Newton dependency.
+
+Do not start a full training job with this profile until all of these gates pass
+on the exact target build and assets:
+
+1. Run the focused configuration tests.
+2. Verify one pre-inserted plug remains stable in a one-environment scene.
+3. Run a scripted insertion while the robot holds the plug and inspect contact,
+   grasp, and orientation health.
+4. Run an 8-16 environment, 6-10 iteration diagnostic with synchronous CUDA
+   error reporting.
+5. Scale through 64, 128, and 256 environments while checking collision and
+   per-body contact-capacity watermarks before submitting full training.
+
+For the first diagnostic, replace `physics=newton_sdf` in the Newton smoke
+command with `physics=newton_vbd`. This profile is a solver experiment, not a
+validated deployment profile; do not export or deploy its checkpoints until it
+passes the stability gates and a separate simulation and real-robot policy
+qualification.
 
 The nominal USD provides the portable training baseline. For policy training
 that should match a particular physical arm, provide that arm's validated

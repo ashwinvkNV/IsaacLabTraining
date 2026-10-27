@@ -14,6 +14,7 @@ import pytest
 import torch
 import warp as wp
 from isaaclab.actuators import IdealPDActuatorCfg, ImplicitActuatorCfg
+from isaaclab.controllers import OperationalSpaceController
 from isaaclab.controllers.operational_space_cfg import OperationalSpaceControllerCfg
 from isaaclab.managers import ObservationTermCfg, SceneEntityCfg
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
@@ -740,7 +741,7 @@ def test_displayport_newton_osc_abi_robot_and_gravity_settings():
     assert controller.inertial_dynamics_decoupling is True
     assert controller.partial_inertial_dynamics_decoupling is False
     assert controller.gravity_compensation is False
-    assert tuple(controller.motion_stiffness_task) == pytest.approx((300.0, 300.0, 300.0, 30.0, 30.0, 30.0))
+    assert tuple(controller.motion_stiffness_task) == pytest.approx((300.0,) * 6)
     assert tuple(controller.motion_damping_ratio_task) == pytest.approx((1.0,) * 6)
     assert controller.nullspace_control == "none"
 
@@ -781,6 +782,24 @@ def test_displayport_newton_osc_abi_robot_and_gravity_settings():
     assert passive.armature == pytest.approx(0.05)
     assert cfg.hand_hold_width == pytest.approx(-0.1)
     assert cfg.hand_close_width == pytest.approx(-0.1)
+
+
+def test_displayport_newton_osc_matches_linear_and_angular_response_rates():
+    """Fully decoupled OSC must give equal normalized response to all task axes."""
+    controller_cfg = Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg().actions.arm_action.controller_cfg
+    controller = OperationalSpaceController(controller_cfg, num_envs=1, device="cpu")
+    current_pose = torch.tensor([[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]])
+    command = torch.full((1, 6), 0.01)
+
+    controller.set_command(command, current_ee_pose_b=current_pose)
+    efforts = controller.compute(
+        jacobian_b=torch.eye(6).unsqueeze(0),
+        current_ee_pose_b=current_pose,
+        current_ee_vel_b=torch.zeros(1, 6),
+        mass_matrix=torch.eye(6).unsqueeze(0),
+    )
+
+    assert efforts == pytest.approx(torch.full((1, 6), 3.0))
 
 
 def test_displayport_newton_observation_abi_noise_and_deployment_metadata():

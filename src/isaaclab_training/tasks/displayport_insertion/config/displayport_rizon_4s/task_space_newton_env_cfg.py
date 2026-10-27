@@ -54,7 +54,9 @@ if TYPE_CHECKING:
 _ARM_JOINTS = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7"]
 _OSC_POSITION_SCALE = (0.025, 0.025, 0.010)
 _OSC_ORIENTATION_SCALE = 0.025
-_OSC_STIFFNESS = (300.0, 300.0, 300.0, 30.0, 30.0, 30.0)
+# Full inertial decoupling makes these closed-loop task-acceleration gains [s^-2].
+# Equal values match the ideal translational and rotational response rates.
+_OSC_STIFFNESS = (300.0,) * 6
 _OSC_DAMPING_RATIO = (1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
 _NEWTON_NUM_ENVS = 256
 _NEWTON_MAX_TRIANGLE_PAIRS = 2**25

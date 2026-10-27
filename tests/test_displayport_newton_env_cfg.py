@@ -841,6 +841,7 @@ def test_displayport_newton_osc_matches_linear_and_angular_response_rates():
         current_ee_pose_b=current_pose,
         current_ee_vel_b=torch.zeros(1, 6),
         mass_matrix=torch.eye(6).unsqueeze(0),
+        gravity=torch.zeros(1, 6),
     )
 
     assert efforts == pytest.approx(torch.full((1, 6), 3.0))

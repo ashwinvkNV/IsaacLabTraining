@@ -432,8 +432,9 @@ class Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg(Rizon4sTaskSpaceDisplaypo
         newton_events = NewtonTaskSpaceEventCfg()
         self.events.randomize_arm_joint_friction = newton_events.randomize_arm_joint_friction
         self.events.randomize_arm_pd_gains = None
-        # FeatherPGS averages pair friction while MJWarp multiplies it. These
-        # mapped values preserve plug/socket=0.003 and plug/finger=3.0.
+        # FeatherPGS averages pair friction, so these mapped values preserve
+        # plug/socket=0.003 and plug/finger=3.0 for that preset. MJWarp instead
+        # uses the socket contact priority authored above.
         plug_friction = preset(default=(3.0, 3.0), feather_pgs=(0.005, 0.005))
         finger_friction = preset(default=(1.0, 1.0), feather_pgs=(5.995, 5.995))
         self.events.plug_physics_material.params["static_friction_range"] = plug_friction

@@ -26,6 +26,9 @@ def parse_export_args(argv: list[str] | None = None) -> tuple[argparse.Namespace
     from isaaclab.app import AppLauncher
     from isaaclab_tasks.utils import setup_preset_cli
 
+    # Preset argument discovery queries Gym's registry, including for ``--help``.
+    import isaaclab_training.tasks  # noqa: F401
+
     parser = argparse.ArgumentParser(description="Export an Isaac Lab policy with RSL-RL and LEAPP.")
     parser.add_argument("--task", type=str, default=None, help="Name of the registered task.")
     parser.add_argument(
@@ -68,9 +71,7 @@ def parse_export_args(argv: list[str] | None = None) -> tuple[argparse.Namespace
         "--task_space_contract",
         action="store_true",
         default=False,
-        help=(
-            "Compatibility shortcut for '--contract displayport_task_space'. Prefer --contract for new tasks."
-        ),
+        help=("Compatibility shortcut for '--contract displayport_task_space'. Prefer --contract for new tasks."),
     )
     AppLauncher.add_app_launcher_args(parser)
     parser.add_argument("--limit_cpu_threads", type=int, default=argparse.SUPPRESS, help=argparse.SUPPRESS)
@@ -285,6 +286,7 @@ def export_rsl_rl_agent(args_cli: argparse.Namespace, env_cfg, agent_cfg) -> boo
                     obs_for_policy = contract.prepare_observations(
                         graph_name,
                         obs,
+                        env_cfg=env.unwrapped.cfg,
                         dtype=next(policy.parameters()).dtype,
                     )
                 else:
@@ -316,6 +318,7 @@ def export_rsl_rl_agent(args_cli: argparse.Namespace, env_cfg, agent_cfg) -> boo
                         env.unwrapped.device,
                         next(policy.parameters()).dtype,
                         export_method,
+                        agent_cfg.clip_actions,
                     )
                     obs = env.get_observations()
                 else:

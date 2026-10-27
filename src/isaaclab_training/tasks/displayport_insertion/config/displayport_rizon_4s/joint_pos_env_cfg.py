@@ -6,16 +6,21 @@
 """Joint-space DisplayPort insertion environment for Flexiv Rizon 4S + Grav gripper."""
 
 import math
+import warnings
 
 import torch
 
-import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg, RigidObjectCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.utils.configclass import configclass
+from isaaclab_physx.sim.schemas import (
+    PhysxArticulationRootPropertiesCfg,
+    PhysxCollisionPropertiesCfg,
+    PhysxRigidBodyPropertiesCfg,
+)
 
 import isaaclab_training.mdp as mdp
 import isaaclab_training.mdp.terminations as cable_terminations
@@ -55,44 +60,54 @@ from isaaclab_assets import FLEXIV_RIZON4S_GRAV_GRIPPER_CFG  # isort: skip
 ##
 
 
+_GRAV_GRIPPER_MIMIC_GEARING = {
+    "finger_joint": 1.0,
+    "left_inner_knuckle_joint": 1.0,
+    "right_inner_knuckle_joint": 1.0,
+    "right_outer_knuckle_joint": 1.0,
+    "left_outer_finger_joint": -1.0,
+    "right_outer_finger_joint": -1.0,
+}
+
+
 def set_finger_joint_pos_grav(
     joint_pos: torch.Tensor,
     reset_ind_joint_pos: list[int],
     finger_joints: list[int],
     finger_joint_position: float,
+    joint_name_to_idx: dict[str, int] | None = None,
 ):
-    """Set finger joint positions for Grav gripper.
+    """Set Grav gripper joint positions using backend-independent joint names.
 
     Args:
         joint_pos: Joint positions tensor
         reset_ind_joint_pos: Row indices into the sliced joint_pos tensor
-        finger_joints: List of all gripper joint indices (6 joints total)
-        finger_joint_position: Target position for main finger joint (in radians)
-
-    Note:
-        Grav gripper joint structure (indices from finger_joints list):
-        [0] finger_joint - main controllable joint
-        [1] left_inner_knuckle_joint - mimic with -1 gearing
-        [2] right_inner_knuckle_joint - mimic with -1 gearing
-        [3] right_outer_knuckle_joint - mimic with -1 gearing
-        [4] left_outer_finger_joint - mimic with +1 gearing
-        [5] right_outer_finger_joint - mimic with +1 gearing
+        finger_joints: Gripper joint indices. Used to validate the expected joint count.
+        finger_joint_position: Target position for the driven finger joint [rad].
+        joint_name_to_idx: Mapping from joint names to simulation joint indices.
     """
+    if len(finger_joints) < len(_GRAV_GRIPPER_MIMIC_GEARING):
+        raise ValueError(f"Grav gripper requires at least 6 finger joints, got {len(finger_joints)}")
+    if joint_name_to_idx is None:
+        warnings.warn(
+            "Calling set_finger_joint_pos_grav without joint_name_to_idx is deprecated; "
+            "pass the mapping to make resets independent of backend joint ordering.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        legacy_gearing = (1.0, 1.0, 1.0, 1.0, -1.0, -1.0)
+        for idx in reset_ind_joint_pos:
+            for offset, gearing in enumerate(legacy_gearing):
+                joint_pos[idx, finger_joints[offset]] = gearing * finger_joint_position
+        return
+
+    missing = [name for name in _GRAV_GRIPPER_MIMIC_GEARING if name not in joint_name_to_idx]
+    if missing:
+        raise ValueError(f"Grav gripper joints not found on the robot: {missing}.")
+
     for idx in reset_ind_joint_pos:
-        if len(finger_joints) < 6:
-            raise ValueError(f"Grav gripper requires at least 6 finger joints, got {len(finger_joints)}")
-
-        # Main controllable joint
-        joint_pos[idx, finger_joints[0]] = finger_joint_position
-
-        # Mimic joints with -1 gearing
-        joint_pos[idx, finger_joints[1]] = finger_joint_position  # left_inner_knuckle_joint
-        joint_pos[idx, finger_joints[2]] = finger_joint_position  # right_inner_knuckle_joint
-        joint_pos[idx, finger_joints[3]] = finger_joint_position  # right_outer_knuckle_joint
-
-        # Mimic joints with +1 gearing
-        joint_pos[idx, finger_joints[4]] = -finger_joint_position  # left_outer_finger_joint
-        joint_pos[idx, finger_joints[5]] = -finger_joint_position  # right_outer_finger_joint
+        for joint_name, gearing in _GRAV_GRIPPER_MIMIC_GEARING.items():
+            joint_pos[idx, joint_name_to_idx[joint_name]] = gearing * finger_joint_position
 
 
 ##
@@ -308,7 +323,7 @@ class Rizon4sGravDisplayportInsertionEnvCfg(DisplayportInsertionEnvCfg):
         self.scene.robot = FLEXIV_RIZON4S_GRAV_GRIPPER_CFG.replace(
             prim_path="{ENV_REGEX_NS}/Robot",
             spawn=FLEXIV_RIZON4S_GRAV_GRIPPER_CFG.spawn.replace(
-                rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                rigid_props=PhysxRigidBodyPropertiesCfg(
                     disable_gravity=True,
                     max_depenetration_velocity=5.0,
                     linear_damping=0.0,
@@ -320,12 +335,12 @@ class Rizon4sGravDisplayportInsertionEnvCfg(DisplayportInsertionEnvCfg):
                     solver_velocity_iteration_count=1,
                     max_contact_impulse=1e32,
                 ),
-                articulation_props=sim_utils.ArticulationRootPropertiesCfg(
+                articulation_props=PhysxArticulationRootPropertiesCfg(
                     enabled_self_collisions=False,
                     solver_position_iteration_count=4,
                     solver_velocity_iteration_count=1,
                 ),
-                collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.005, rest_offset=0.0),
+                collision_props=PhysxCollisionPropertiesCfg(contact_offset=0.005, rest_offset=0.0),
             ),
             # Joint positions for the DisplayPort insertion station home pose
             init_state=ArticulationCfg.InitialStateCfg(

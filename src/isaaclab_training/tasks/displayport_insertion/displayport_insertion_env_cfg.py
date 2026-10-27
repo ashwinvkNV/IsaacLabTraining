@@ -15,6 +15,8 @@ from dataclasses import MISSING
 
 import torch
 from isaaclab_physx.physics import PhysxCfg
+from isaaclab_physx.sim.schemas import PhysxCollisionPropertiesCfg, PhysxRigidBodyPropertiesCfg
+from isaaclab_physx.sim.spawners.materials import PhysxRigidBodyMaterialCfg
 
 import isaaclab.sim as sim_utils
 import isaaclab.utils.math as math_utils
@@ -29,19 +31,17 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim.simulation_cfg import SimulationCfg
+from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.utils.configclass import configclass
 from isaaclab.utils.noise import UniformNoiseCfg
+from isaaclab_visualizers.kit import KitVisualizerCfg
 
 import isaaclab_training.mdp as mdp
 from isaaclab_training.mdp.noise_models import ResetSampledConstantNoiseModelCfg
 
-CABLE_INSERTION_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# DisplayPort assets are published on the Isaac staging asset server. They are not yet mirrored
-# to the production bucket that ``ISAAC_NUCLEUS_DIR`` resolves to, so the root is pinned here.
-# Switch to ``f"{ISAAC_NUCLEUS_DIR}/Props/Factory/display_port_cable_assets"`` once promoted.
-_DISPLAY_ASSETS_STAGING_ROOT = "https://omniverse-content-staging.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac"
-DISPLAY_ASSETS_DIR = f"{_DISPLAY_ASSETS_STAGING_ROOT}/Props/Factory/display_port_cable_assets"
+# Resolve task assets from the production root selected by the installed Isaac Sim version.
+_DISPLAY_ASSETS_DEFAULT_DIR = f"{ISAAC_NUCLEUS_DIR}/Props/Factory/display_port_cable_assets"
+DISPLAY_ASSETS_DIR = os.environ.get("ISAACLAB_TRAINING_DISPLAY_ASSETS_DIR", _DISPLAY_ASSETS_DEFAULT_DIR).rstrip("/")
 
 
 # The asset offsets below are plain Python tuples evaluated at import time, while
@@ -131,7 +131,7 @@ class DisplayPortPlug(RigidObjectCfg):
         usd_path=f"{DISPLAY_ASSETS_DIR}/displayport_plug.usd",
         scale=(1.0, 1.0, 1.0),
         activate_contact_sensors=True,
-        rigid_props=sim_utils.RigidBodyPropertiesCfg(
+        rigid_props=PhysxRigidBodyPropertiesCfg(
             disable_gravity=False,
             kinematic_enabled=False,
             max_depenetration_velocity=0.5,
@@ -145,7 +145,7 @@ class DisplayPortPlug(RigidObjectCfg):
             max_contact_impulse=None,
         ),
         mass_props=sim_utils.MassPropertiesCfg(mass=0.03),
-        collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.00001, rest_offset=-0.00005),
+        collision_props=PhysxCollisionPropertiesCfg(contact_offset=0.00001, rest_offset=-0.00005),
     )
     init_state = RigidObjectCfg.InitialStateCfg(pos=_PLUG_ROOT_POS, rot=_DEFAULT_PLUG_ROT)
 
@@ -159,7 +159,7 @@ class DisplayPortSocket(RigidObjectCfg):
         usd_path=f"{DISPLAY_ASSETS_DIR}/displayport_socket_no_protrusions.usd",
         scale=(1.0, 1.0, 1.0),
         activate_contact_sensors=False,
-        rigid_props=sim_utils.RigidBodyPropertiesCfg(
+        rigid_props=PhysxRigidBodyPropertiesCfg(
             disable_gravity=False,
             kinematic_enabled=True,
             max_depenetration_velocity=5.0,
@@ -173,7 +173,7 @@ class DisplayPortSocket(RigidObjectCfg):
             max_contact_impulse=1e32,
         ),
         mass_props=sim_utils.MassPropertiesCfg(mass=None),
-        collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.0001, rest_offset=-0.0001),
+        collision_props=PhysxCollisionPropertiesCfg(contact_offset=0.0001, rest_offset=-0.0001),
     )
     init_state = RigidObjectCfg.InitialStateCfg(pos=_SOCKET_ROOT_POS, rot=_DEFAULT_SOCKET_ROT)
 
@@ -337,7 +337,7 @@ class DisplayportInsertionEnvCfg(ManagerBasedRLEnvCfg):
     success_plug_offset: list = MISSING
     success_plug_goal_rot_inv: list = MISSING
     sim: SimulationCfg = SimulationCfg(
-        physics_material=sim_utils.RigidBodyMaterialCfg(
+        physics_material=PhysxRigidBodyMaterialCfg(
             friction_combine_mode="multiply",
             restitution_combine_mode="multiply",
             static_friction=1.0,
@@ -357,8 +357,10 @@ class DisplayportInsertionEnvCfg(ManagerBasedRLEnvCfg):
     def __post_init__(self):
         """Post initialization."""
         self.episode_length_s = 6.66
-        self.viewer.eye = (0.5, -1.8, 1.2)
-        self.viewer.lookat = (0.5, 0.0, 0.5)
+        self.sim.default_visualizer_cfg = KitVisualizerCfg(
+            eye=(0.5, -1.8, 1.2),
+            lookat=(0.5, 0.0, 0.5),
+        )
         self.decimation = 8
         self.sim.render_interval = self.decimation
         self.sim.dt = 1.0 / 240.0

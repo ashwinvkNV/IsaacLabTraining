@@ -11,7 +11,6 @@ reset curriculum. The end-effector pose is commanded as a relative Cartesian del
 
 import math
 
-import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg, RigidObjectCfg
 from isaaclab.controllers.operational_space_cfg import OperationalSpaceControllerCfg
@@ -21,6 +20,11 @@ from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.utils.configclass import configclass
+from isaaclab_physx.sim.schemas import (
+    PhysxArticulationRootPropertiesCfg,
+    PhysxCollisionPropertiesCfg,
+    PhysxRigidBodyPropertiesCfg,
+)
 
 import isaaclab_training.mdp as mdp
 import isaaclab_training.mdp.terminations as cable_terminations
@@ -62,6 +66,13 @@ _ACTION_SCALE = 0.025
 
 # DisplayPort blade engagement along the insertion axis at the seated pose [m].
 _INSERTION_LENGTH = 0.011
+
+# Physical seat relative to the socket keypoint, expressed in the socket frame [m].
+# At-goal resets use this offset without changing the reward or observation keypoint.
+_AT_GOAL_SEAT_OFFSET = [0.00184, 0.0, -0.0006]
+
+# Keep the deepest valid at-goal spawn at 15 mm from the reward keypoint.
+_AT_GOAL_MAX_ABSOLUTE_DEPTH = 0.015
 
 # Gripper tool-center-point (TCP) offset from the flange body, in the flange's local
 # frame [m]. The policy observes the TCP pose (where the plug is held), not the raw
@@ -217,7 +228,8 @@ class TaskSpaceEventCfg:
             "num_steps_per_env": 512,
             "insertion_axis": [1.0, 0.0, 0.0],
             "insertion_length": _INSERTION_LENGTH,
-            "at_goal_depth_range": [0.0, 0.015],
+            "at_goal_depth_range": [0.0, _AT_GOAL_MAX_ABSOLUTE_DEPTH - _AT_GOAL_SEAT_OFFSET[0]],
+            "at_goal_seat_offset": _AT_GOAL_SEAT_OFFSET,
             "approach_depth_range": [0.02, 0.06],
             "socket_insertion_offset": SOCKET_INSERTION_OFFSET,
             "plug_insertion_offset": PLUG_INSERTION_OFFSET,
@@ -345,7 +357,7 @@ class Rizon4sTaskSpaceDisplayportInsertionEnvCfg(DisplayportInsertionEnvCfg):
         self.scene.robot = FLEXIV_RIZON4S_GRAV_GRIPPER_CFG.replace(
             prim_path="{ENV_REGEX_NS}/Robot",
             spawn=FLEXIV_RIZON4S_GRAV_GRIPPER_CFG.spawn.replace(
-                rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                rigid_props=PhysxRigidBodyPropertiesCfg(
                     disable_gravity=True,
                     max_depenetration_velocity=5.0,
                     linear_damping=0.0,
@@ -357,12 +369,12 @@ class Rizon4sTaskSpaceDisplayportInsertionEnvCfg(DisplayportInsertionEnvCfg):
                     solver_velocity_iteration_count=1,
                     max_contact_impulse=1e32,
                 ),
-                articulation_props=sim_utils.ArticulationRootPropertiesCfg(
+                articulation_props=PhysxArticulationRootPropertiesCfg(
                     enabled_self_collisions=False,
                     solver_position_iteration_count=4,
                     solver_velocity_iteration_count=1,
                 ),
-                collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.005, rest_offset=0.0),
+                collision_props=PhysxCollisionPropertiesCfg(contact_offset=0.005, rest_offset=0.0),
             ),
             init_state=ArticulationCfg.InitialStateCfg(
                 joint_pos={

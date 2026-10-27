@@ -5,7 +5,7 @@
 
 from isaaclab.utils.configclass import configclass
 
-from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticRecurrentCfg, RslRlPpoAlgorithmCfg
+from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg, RslRlRNNModelCfg
 
 
 @configclass
@@ -17,18 +17,26 @@ class Rizon4sGravDisplayportInsertionRNNPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     clip_actions = 1.0
     resume = False
     obs_groups = {
-        "policy": ["policy"],
+        "actor": ["policy"],
         "critic": ["critic"],
     }
-    policy = RslRlPpoActorCriticRecurrentCfg(
-        state_dependent_std=True,
-        init_noise_std=1.0,
-        actor_obs_normalization=True,
-        critic_obs_normalization=True,
-        actor_hidden_dims=[256, 128, 64],
-        critic_hidden_dims=[256, 128, 64],
-        noise_std_type="log",
+    actor = RslRlRNNModelCfg(
+        hidden_dims=[256, 128, 64],
         activation="elu",
+        obs_normalization=True,
+        distribution_cfg=RslRlRNNModelCfg.HeteroscedasticGaussianDistributionCfg(
+            init_std=1.0,
+            std_type="log",
+        ),
+        rnn_type="lstm",
+        rnn_hidden_dim=256,
+        rnn_num_layers=2,
+    )
+    critic = RslRlRNNModelCfg(
+        hidden_dims=[256, 128, 64],
+        activation="elu",
+        obs_normalization=True,
+        distribution_cfg=None,
         rnn_type="lstm",
         rnn_hidden_dim=256,
         rnn_num_layers=2,
@@ -47,3 +55,12 @@ class Rizon4sGravDisplayportInsertionRNNPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         desired_kl=0.008,
         max_grad_norm=1.0,
     )
+
+
+@configclass
+class Rizon4sGravDisplayportInsertionNewtonRNNPPORunnerCfg(Rizon4sGravDisplayportInsertionRNNPPORunnerCfg):
+    """RSL-RL runner for the Newton task-space training profile."""
+
+    seed = 123
+    max_iterations = 1000
+    experiment_name = "displayport_insertion_rizon4s_newton_osc"

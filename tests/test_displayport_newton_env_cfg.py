@@ -21,7 +21,7 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.utils.noise import UniformNoiseCfg
 from isaaclab_assets import FLEXIV_RIZON4S_GRAV_GRIPPER_CFG
 from isaaclab_newton.physics import FeatherPGSSolverCfg, MJWarpSolverCfg, NewtonCfg
-from isaaclab_newton.sim.schemas import NewtonCollisionCfg, NewtonSDFCollisionCfg
+from isaaclab_newton.sim.schemas import MujocoCollisionCfg, NewtonCollisionCfg, NewtonSDFCollisionCfg
 from isaaclab_physx.physics import PhysxCfg
 from isaaclab_physx.sim.schemas import PhysxCollisionCfg
 from isaaclab_tasks.utils.hydra import resolve_presets
@@ -638,10 +638,10 @@ def test_displayport_newton_timing_solver_and_point_sdf_assets():
     plug_sdf_paths = ("/collision_mesh",)
     socket_sdf_paths = tuple(f"/tn__2584N111_DisplayportCord_jP/Body{body_id}/Mesh" for body_id in (5, 6, 8, 12, 13))
     collision_fragment_sets = (
-        (cfg.scene.dp_plug.spawn.collision_props, 0.00001, -0.00005, plug_sdf_paths),
-        (cfg.scene.dp_socket.spawn.collision_props, 0.0001, -0.0001, socket_sdf_paths),
+        (cfg.scene.dp_plug.spawn.collision_props, 0.00001, -0.00005, plug_sdf_paths, None),
+        (cfg.scene.dp_socket.spawn.collision_props, 0.0001, -0.0001, socket_sdf_paths, 1),
     )
-    for mapping, contact_offset, rest_offset, sdf_paths in collision_fragment_sets:
+    for mapping, contact_offset, rest_offset, sdf_paths, contact_priority in collision_fragment_sets:
         assert set(mapping) == {"/.*", *sdf_paths}
 
         physx_fragments = mapping["/.*"]
@@ -654,6 +654,12 @@ def test_displayport_newton_timing_solver_and_point_sdf_assets():
         for prim_path in sdf_paths:
             fragments = mapping[prim_path]
             assert not any(isinstance(fragment, PhysxCollisionCfg) for fragment in fragments)
+            mujoco = [fragment for fragment in fragments if isinstance(fragment, MujocoCollisionCfg)]
+            if contact_priority is None:
+                assert mujoco == []
+            else:
+                assert len(mujoco) == 1
+                assert mujoco[0].priority == contact_priority
             collision = next(fragment for fragment in fragments if isinstance(fragment, NewtonCollisionCfg))
             sdf = next(fragment for fragment in fragments if isinstance(fragment, NewtonSDFCollisionCfg))
             assert collision.contact_margin == pytest.approx(0.0)

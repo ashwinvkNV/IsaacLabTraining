@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 import torch
 from isaaclab_newton.physics import MJWarpSolverCfg, NewtonCfg, NewtonCollisionPipelineCfg, NewtonShapeCfg, VBDSolverCfg
 from isaaclab_newton.sim.schemas import (
+    MujocoCollisionCfg,
     MujocoJointDrivePropertiesCfg,
     MujocoRigidBodyPropertiesCfg,
     NewtonCollisionCfg,
@@ -229,13 +230,15 @@ def _newton_sdf_properties(
     contact_offset: float,
     rest_offset: float,
     sdf_prim_paths: tuple[str, ...],
-) -> dict[str, list[PhysxCollisionCfg | NewtonCollisionCfg | NewtonSDFCollisionCfg]]:
+    contact_priority: int | None = None,
+) -> dict[str, list[PhysxCollisionCfg | MujocoCollisionCfg | NewtonCollisionCfg | NewtonSDFCollisionCfg]]:
     """Create point-SDF properties only for meshes authored as SDF colliders."""
-    properties: dict[str, list[PhysxCollisionCfg | NewtonCollisionCfg | NewtonSDFCollisionCfg]] = {
+    properties: dict[str, list[PhysxCollisionCfg | MujocoCollisionCfg | NewtonCollisionCfg | NewtonSDFCollisionCfg]] = {
         "/.*": [PhysxCollisionCfg(contact_offset=contact_offset, rest_offset=rest_offset)]
     }
     for prim_path in sdf_prim_paths:
         properties[prim_path] = [
+            *([MujocoCollisionCfg(priority=contact_priority)] if contact_priority is not None else []),
             NewtonCollisionCfg(contact_margin=0.0, contact_gap=0.005),
             NewtonSDFCollisionCfg(
                 sdf_max_resolution=256,
@@ -411,6 +414,9 @@ class Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg(Rizon4sTaskSpaceDisplaypo
             0.0001,
             -0.0001,
             tuple(f"/tn__2584N111_DisplayportCord_jP/Body{body_id}/Mesh" for body_id in (5, 6, 8, 12, 13)),
+            # The socket parameters must govern contacts with lower-priority
+            # colliders instead of inheriting the plug's grasp friction.
+            contact_priority=1,
         )
 
         self.observations = NewtonTaskSpaceObservationsCfg()

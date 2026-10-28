@@ -385,9 +385,10 @@ def _run_live_checks(
     unexpected_reset = False
     finite_state = True
     observations = None
+    first_step: dict[str, Any] | None = None
     original_termination_params = _suspend_grasp_terminations(raw)
     try:
-        for _ in range(probe_steps):
+        for step_index in range(probe_steps):
             observations, reset = _step(env, zero)
             unexpected_reset |= reset
             for term_name, params in original_termination_params.items():
@@ -443,11 +444,32 @@ def _run_live_checks(
                 _maximum(math_utils.quat_error_magnitude(_to_torch(plug.data.root_quat_w), plug_quat_0)),
             )
             finite_state &= _scene_finite(raw, observations)
+            if step_index == 0:
+                first_step = {
+                    "abs_joint_delta_rad": torch.amax(torch.abs(joint_pos - joint_pos_0), dim=0).cpu().tolist(),
+                    "abs_joint_speed_rad_s": torch.amax(joint_vel, dim=0).cpu().tolist(),
+                    "abs_computed_effort_nm": torch.amax(computed_effort, dim=0).cpu().tolist(),
+                    "abs_applied_effort_nm": torch.amax(applied_effort, dim=0).cpu().tolist(),
+                    "flange_translation_m": _maximum(torch.linalg.vector_norm(flange_pos - flange_pos_0, dim=-1)),
+                    "flange_rotation_rad": _maximum(math_utils.quat_error_magnitude(flange_quat, flange_quat_0)),
+                    "grasp_translation_m": _maximum(torch.linalg.vector_norm(grasp_pos - grasp_pos_0, dim=-1)),
+                    "grasp_rotation_rad": _maximum(math_utils.quat_error_magnitude(grasp_quat, grasp_quat_0)),
+                    "plug_translation_m": _maximum(
+                        torch.linalg.vector_norm(_to_torch(plug.data.root_pos_w) - plug_pos_0, dim=-1)
+                    ),
+                    "plug_rotation_rad": _maximum(
+                        math_utils.quat_error_magnitude(_to_torch(plug.data.root_quat_w), plug_quat_0)
+                    ),
+                    "abs_plug_com_velocity": torch.amax(plug_velocity, dim=0).cpu().tolist(),
+                    "abs_robot_body_velocity": torch.amax(body_velocity, dim=(0, 1)).cpu().tolist(),
+                    "rigid_contacts": _rigid_contact_snapshot(raw),
+                }
     finally:
         _restore_termination_params(raw, original_termination_params)
     one_step = {
         "probe_steps": probe_steps,
         "elapsed_simulation_s": probe_steps * raw.step_dt,
+        "first_step": first_step,
         "arm_joint_names": list(arm_joint_names),
         "maximum_abs_joint_delta_rad": maximum_joint_delta.cpu().tolist(),
         "maximum_abs_joint_speed_rad_s": maximum_joint_speed.cpu().tolist(),

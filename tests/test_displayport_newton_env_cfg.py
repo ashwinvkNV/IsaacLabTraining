@@ -62,6 +62,7 @@ from isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s.t
     DisplayportNewtonPhysicsCfg,
     Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg,
     Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg_PLAY,
+    _block_invalid_mesh_normals,
     _is_valid_diagonal_inertia,
     _is_valid_principal_axes,
     _spawn_plug_with_validated_sdf_meshes,
@@ -446,6 +447,47 @@ def test_newton_flange_inertia_matches_documented_fallback():
     assert _uniform_sphere_inertia(1.0e-4) == pytest.approx((3.3164051824e-10,) * 3)
     with pytest.raises(ValueError, match="positive and finite"):
         _uniform_sphere_inertia(0.0)
+
+
+def test_newton_asset_preprocessing_blocks_only_malformed_indexed_vertex_normals():
+    """Malformed visual normals must be regenerated without changing mesh topology."""
+    import newton
+    from pxr import Usd, UsdGeom
+
+    stage = Usd.Stage.CreateInMemory()
+    root = UsdGeom.Xform.Define(stage, "/World/plug").GetPrim()
+    malformed = UsdGeom.Mesh.Define(stage, "/World/plug/invalid")
+    malformed.CreatePointsAttr([(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)])
+    malformed.CreateFaceVertexCountsAttr([3])
+    malformed.CreateFaceVertexIndicesAttr([0, 1, 2])
+    malformed.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
+    malformed_normals = UsdGeom.PrimvarsAPI(malformed).CreatePrimvar(
+        "normals", malformed.GetNormalsAttr().GetTypeName(), UsdGeom.Tokens.vertex
+    )
+    malformed_normals.Set([(0.0, 0.0, 1.0)])
+    malformed_normals.SetIndices([0, 0])
+
+    valid = UsdGeom.Mesh.Define(stage, "/World/plug/valid")
+    valid.CreatePointsAttr([(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)])
+    valid.CreateFaceVertexCountsAttr([3])
+    valid.CreateFaceVertexIndicesAttr([0, 1, 2])
+    valid.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
+    valid_normals = UsdGeom.PrimvarsAPI(valid).CreatePrimvar(
+        "normals", valid.GetNormalsAttr().GetTypeName(), UsdGeom.Tokens.vertex
+    )
+    valid_normals.Set([(0.0, 0.0, 1.0)])
+    valid_normals.SetIndices([0, 0, 0])
+
+    with pytest.raises(ValueError, match="does not match number of points"):
+        newton.usd.get_mesh(malformed.GetPrim(), load_normals=True, compute_inertia=False)
+
+    assert _block_invalid_mesh_normals(root) == ("/World/plug/invalid",)
+    repaired = newton.usd.get_mesh(malformed.GetPrim(), load_normals=True, compute_inertia=False)
+
+    assert len(repaired.vertices) == 3
+    assert len(repaired.normals) == 3
+    assert valid_normals.Get() == [(0.0, 0.0, 1.0)]
+    assert valid_normals.GetIndices() == [0, 0, 0]
 
 
 def test_newton_flange_inertia_is_authored_before_multi_env_clone(monkeypatch: pytest.MonkeyPatch):

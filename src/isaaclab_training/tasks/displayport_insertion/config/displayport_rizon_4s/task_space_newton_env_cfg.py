@@ -180,18 +180,65 @@ def _validate_sdf_meshes(root_prim, relative_paths: tuple[str, ...]) -> None:
         raise ValueError(f"DisplayPort asset is missing required colliding SDF meshes: {missing!r}.")
 
 
+def _block_invalid_mesh_normals(root_prim) -> tuple[str, ...]:
+    """Block malformed mesh normals so Newton can reconstruct them from topology."""
+    from pxr import Usd, UsdGeom
+
+    blocked_paths = []
+    for prim in Usd.PrimRange(root_prim):
+        if not prim.IsA(UsdGeom.Mesh):
+            continue
+        mesh = UsdGeom.Mesh(prim)
+        expected_counts = {
+            UsdGeom.Tokens.constant: 1,
+            UsdGeom.Tokens.uniform: len(mesh.GetFaceVertexCountsAttr().Get() or ()),
+            UsdGeom.Tokens.vertex: len(mesh.GetPointsAttr().Get() or ()),
+            UsdGeom.Tokens.varying: len(mesh.GetPointsAttr().Get() or ()),
+            UsdGeom.Tokens.faceVarying: len(mesh.GetFaceVertexIndicesAttr().Get() or ()),
+        }
+
+        primvar = UsdGeom.PrimvarsAPI(prim).GetPrimvar("normals")
+        primvar_values = primvar.Get() if primvar else None
+        if primvar_values is not None:
+            interpolation = primvar.GetInterpolation()
+            indices = primvar.GetIndices() if primvar.IsIndexed() else None
+            expanded_count = len(indices) if indices else len(primvar_values)
+            indices_valid = not indices or all(0 <= index < len(primvar_values) for index in indices)
+            if expanded_count != expected_counts.get(interpolation) or not indices_valid:
+                primvar.GetAttr().Block()
+                indices_attr = primvar.GetIndicesAttr()
+                if indices_attr:
+                    indices_attr.Block()
+                blocked_paths.append(str(prim.GetPath()))
+                continue
+
+        normals_attr = mesh.GetNormalsAttr()
+        normals = normals_attr.Get() if normals_attr else None
+        interpolation = mesh.GetNormalsInterpolation()
+        if normals is not None and len(normals) != expected_counts.get(interpolation):
+            normals_attr.Block()
+            blocked_paths.append(str(prim.GetPath()))
+
+    blocked = tuple(blocked_paths)
+    if blocked:
+        _LOGGER.warning("Blocked malformed normals on DisplayPort meshes so Newton can reconstruct them: %s", blocked)
+    return blocked
+
+
 @clone
 def _spawn_plug_with_validated_sdf_meshes(prim_path: str, cfg, translation=None, orientation=None, **kwargs):
-    """Spawn the plug and validate the point-SDF mesh contract."""
+    """Spawn the plug, sanitize visual normals, and validate the point-SDF mesh contract."""
     prim = spawn_from_usd(prim_path, cfg, translation, orientation, **kwargs)
+    _block_invalid_mesh_normals(prim)
     _validate_sdf_meshes(prim, ("/collision_mesh",))
     return prim
 
 
 @clone
 def _spawn_socket_with_validated_sdf_meshes(prim_path: str, cfg, translation=None, orientation=None, **kwargs):
-    """Spawn the socket and validate the point-SDF mesh contract."""
+    """Spawn the socket, sanitize visual normals, and validate the point-SDF mesh contract."""
     prim = spawn_from_usd(prim_path, cfg, translation, orientation, **kwargs)
+    _block_invalid_mesh_normals(prim)
     _validate_sdf_meshes(
         prim,
         tuple(f"/tn__2584N111_DisplayportCord_jP/Body{body_id}/Mesh" for body_id in (5, 6, 8, 12, 13)),

@@ -88,6 +88,43 @@ def _accumulate_termination_counts(raw_env: Any, counts: dict[str, int]) -> None
         counts[name] = counts.get(name, 0) + count
 
 
+def _evaluate_termination(raw_env: Any, term_name: str, params: dict[str, Any]) -> int:
+    """Evaluate one termination with explicit parameters without resetting environments."""
+    import torch
+
+    term = raw_env.termination_manager.get_term_cfg(term_name)
+    return int(torch.count_nonzero(term.func(raw_env, **params)).cpu())
+
+
+def _suspend_grasp_terminations(raw_env: Any) -> dict[str, dict[str, Any]]:
+    """Widen grasp termination thresholds and return their original parameters."""
+    manager = raw_env.termination_manager
+    original: dict[str, dict[str, Any]] = {}
+    overrides = {
+        "plug_dropped": {"distance_threshold": math.inf},
+        "plug_orientation_exceeded": {
+            "roll_threshold_deg": 360.0,
+            "pitch_threshold_deg": 360.0,
+            "yaw_threshold_deg": 360.0,
+        },
+    }
+    for term_name, params in overrides.items():
+        term = manager.get_term_cfg(term_name)
+        original[term_name] = dict(term.params)
+        term.params.update(params)
+        manager.set_term_cfg(term_name, term)
+    return original
+
+
+def _restore_termination_params(raw_env: Any, original: dict[str, dict[str, Any]]) -> None:
+    """Restore termination parameters saved by :func:`_suspend_grasp_terminations`."""
+    manager = raw_env.termination_manager
+    for term_name, params in original.items():
+        term = manager.get_term_cfg(term_name)
+        term.params = params
+        manager.set_term_cfg(term_name, term)
+
+
 def _reset(env: Any) -> Any:
     """Reset a Gymnasium environment and return its observations."""
     observations, _ = env.reset()
@@ -191,6 +228,21 @@ def _scene_finite(raw_env: Any, observations: Any) -> bool:
     )
 
 
+def _gravity_compensation_snapshot(robot: Any, gravity_m_s2: float = 9.81) -> dict[str, Any]:
+    """Return authored body-gravity cancellation forces and their mass-based error."""
+    import torch
+
+    force_w = _to_torch(robot.permanent_wrench_composer.global_force_at_com_w).clone()
+    mass = _to_torch(robot.data.body_mass)
+    expected_w = torch.zeros_like(force_w)
+    expected_w[..., 2] = mass * gravity_m_s2
+    return {
+        "force_w": force_w,
+        "maximum_force_n": _maximum(torch.linalg.vector_norm(force_w, dim=-1)),
+        "maximum_expected_error_n": _maximum(torch.linalg.vector_norm(force_w - expected_w, dim=-1)),
+    }
+
+
 def _scaled_linear_action(raw_env: Any, physical_delta_b: Any, maximum_step_m: float = 0.001) -> Any:
     """Convert a bounded physical translation in the robot base to an OSC action."""
     import torch
@@ -234,6 +286,80 @@ def _run_live_checks(env: Any, report: dict[str, Any]) -> None:
     }
     if tuple(controller.motion_stiffness_task) != (300.0,) * 6:
         failures.append("OSC stiffness is not 300 on all six decoupled task axes")
+
+    # Inspect one complete policy step before the task can autoreset a failed
+    # grasp. This isolates arm dynamics from reset-pose artifacts in the longer
+    # response gates below.
+    _configure_reset(raw, at_goal=False, depth_m=0.04)
+    _reset(env)
+    robot = raw.scene["robot"]
+    plug = raw.scene["dp_plug"]
+    gravity_0 = _gravity_compensation_snapshot(robot)
+    _reset(env)
+    gravity_1 = _gravity_compensation_snapshot(robot)
+    checks["gravity_compensation"] = {
+        "maximum_force_n": gravity_1["maximum_force_n"],
+        "maximum_expected_error_n": gravity_1["maximum_expected_error_n"],
+        "maximum_change_after_second_reset_n": _maximum(
+            torch.linalg.vector_norm(gravity_1["force_w"] - gravity_0["force_w"], dim=-1)
+        ),
+    }
+    if (
+        checks["gravity_compensation"]["maximum_expected_error_n"] > 1.0e-4
+        or checks["gravity_compensation"]["maximum_change_after_second_reset_n"] > 1.0e-4
+    ):
+        failures.append("robot body gravity compensation is missing or accumulates across resets")
+    arm_joint_ids, arm_joint_names = robot.find_joints(
+        ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7"],
+        preserve_order=True,
+    )
+    flange_pos_0, flange_quat_0 = _flange_pose_in_base(raw)
+    grasp_pos_0, grasp_quat_0 = _plug_pose_in_flange(raw)
+    joint_pos_0 = _to_torch(robot.data.joint_pos)[:, arm_joint_ids].clone()
+    plug_pos_0 = _to_torch(plug.data.root_pos_w).clone()
+    plug_quat_0 = _to_torch(plug.data.root_quat_w).clone()
+    original_termination_params = _suspend_grasp_terminations(raw)
+    try:
+        observations, reset = _step(env, zero)
+        physical_termination_counts = {
+            term_name: _evaluate_termination(raw, term_name, params)
+            for term_name, params in original_termination_params.items()
+        }
+    finally:
+        _restore_termination_params(raw, original_termination_params)
+    flange_pos_1, flange_quat_1 = _flange_pose_in_base(raw)
+    grasp_pos_1, grasp_quat_1 = _plug_pose_in_flange(raw)
+    joint_pos_1 = _to_torch(robot.data.joint_pos)[:, arm_joint_ids]
+    joint_vel_1 = torch.abs(_to_torch(robot.data.joint_vel)[:, arm_joint_ids])
+    applied_effort = torch.abs(_to_torch(robot.data.applied_torque)[:, arm_joint_ids])
+    computed_effort = torch.abs(_to_torch(robot.data.computed_torque)[:, arm_joint_ids])
+    plug_velocity = torch.abs(_to_torch(plug.data.root_com_vel_w))
+    body_velocity = torch.abs(_to_torch(robot.data.body_link_vel_w))
+    one_step = {
+        "arm_joint_names": list(arm_joint_names),
+        "maximum_abs_joint_delta_rad": torch.amax(torch.abs(joint_pos_1 - joint_pos_0), dim=0).cpu().tolist(),
+        "maximum_abs_joint_speed_rad_s": torch.amax(joint_vel_1, dim=0).cpu().tolist(),
+        "maximum_abs_computed_effort_nm": torch.amax(computed_effort, dim=0).cpu().tolist(),
+        "maximum_abs_applied_effort_nm": torch.amax(applied_effort, dim=0).cpu().tolist(),
+        "maximum_flange_translation_m": _maximum(torch.linalg.vector_norm(flange_pos_1 - flange_pos_0, dim=-1)),
+        "maximum_flange_rotation_rad": _maximum(math_utils.quat_error_magnitude(flange_quat_1, flange_quat_0)),
+        "maximum_grasp_translation_m": _maximum(torch.linalg.vector_norm(grasp_pos_1 - grasp_pos_0, dim=-1)),
+        "maximum_grasp_rotation_rad": _maximum(math_utils.quat_error_magnitude(grasp_quat_1, grasp_quat_0)),
+        "maximum_plug_translation_m": _maximum(
+            torch.linalg.vector_norm(_to_torch(plug.data.root_pos_w) - plug_pos_0, dim=-1)
+        ),
+        "maximum_plug_rotation_rad": _maximum(
+            math_utils.quat_error_magnitude(_to_torch(plug.data.root_quat_w), plug_quat_0)
+        ),
+        "maximum_abs_plug_com_velocity": torch.amax(plug_velocity, dim=0).cpu().tolist(),
+        "maximum_abs_robot_body_velocity": torch.amax(body_velocity, dim=(0, 1)).cpu().tolist(),
+        "physical_termination_counts": physical_termination_counts,
+        "unexpected_reset": reset,
+        "finite": _scene_finite(raw, observations),
+    }
+    checks["one_step_without_autoreset"] = one_step
+    if reset:
+        failures.append("one-step diagnostic reset despite suspended grasp terminations")
 
     # The arm and grasp must remain stable under a zero relative-pose command.
     _configure_reset(raw, at_goal=False, depth_m=0.04)

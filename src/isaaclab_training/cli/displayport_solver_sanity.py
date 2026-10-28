@@ -78,6 +78,16 @@ def _step(env: Any, action: Any) -> tuple[Any, bool]:
     return observations, bool(torch.any(terminated | truncated))
 
 
+def _accumulate_termination_counts(raw_env: Any, counts: dict[str, int]) -> None:
+    """Accumulate per-environment activations for every termination term."""
+    import torch
+
+    manager = raw_env.termination_manager
+    for name in manager.active_terms:
+        count = int(torch.count_nonzero(manager.get_term(name)).cpu())
+        counts[name] = counts.get(name, 0) + count
+
+
 def _reset(env: Any) -> Any:
     """Reset a Gymnasium environment and return its observations."""
     observations, _ = env.reset()
@@ -235,10 +245,12 @@ def _run_live_checks(env: Any, report: dict[str, Any]) -> None:
     maximum_grasp_drift = 0.0
     maximum_grasp_rotation = 0.0
     unexpected_resets = 0
+    termination_counts: dict[str, int] = {}
     finite_state = True
     for _ in range(30):
         observations, reset = _step(env, zero)
         unexpected_resets += int(reset)
+        _accumulate_termination_counts(raw, termination_counts)
         position, quaternion = _plug_pose_in_flange(raw)
         joint_speed = _maximum(torch.abs(_to_torch(raw.scene["robot"].data.joint_vel)))
         maximum_joint_speed = max(maximum_joint_speed, joint_speed)
@@ -254,6 +266,7 @@ def _run_live_checks(env: Any, report: dict[str, Any]) -> None:
         "maximum_grasp_drift_m": maximum_grasp_drift,
         "maximum_grasp_rotation_rad": maximum_grasp_rotation,
         "unexpected_resets": unexpected_resets,
+        "termination_counts": termination_counts,
         "finite": finite_state,
     }
     if not finite_state or unexpected_resets or maximum_joint_speed > 0.5:
@@ -271,9 +284,11 @@ def _run_live_checks(env: Any, report: dict[str, Any]) -> None:
         action = torch.zeros_like(zero)
         action[:, axis] = 0.4
         reset_count = 0
+        termination_counts = {}
         for _ in range(4):
             observations, reset = _step(env, action)
             reset_count += int(reset)
+            _accumulate_termination_counts(raw, termination_counts)
         position_1, quaternion_1 = _flange_pose_in_base(raw)
         if axis < 3:
             signed_response = _minimum(position_1[:, axis] - position_0[:, axis])
@@ -299,6 +314,7 @@ def _run_live_checks(env: Any, report: dict[str, Any]) -> None:
             {
                 **evidence,
                 "unexpected_resets": reset_count,
+                "termination_counts": termination_counts,
                 "finite": _scene_finite(raw, observations),
             }
         )
@@ -313,10 +329,12 @@ def _run_live_checks(env: Any, report: dict[str, Any]) -> None:
     minimum_success = 1.0
     maximum_mate_drift = 0.0
     unexpected_resets = 0
+    termination_counts = {}
     finite_state = True
     for _ in range(30):
         observations, reset = _step(env, zero)
         unexpected_resets += int(reset)
+        _accumulate_termination_counts(raw, termination_counts)
         state = _insertion_state(raw)
         maximum_mate_drift = max(
             maximum_mate_drift,
@@ -329,6 +347,7 @@ def _run_live_checks(env: Any, report: dict[str, Any]) -> None:
         "maximum_mate_drift_m": maximum_mate_drift,
         "minimum_success_rate": minimum_success,
         "unexpected_resets": unexpected_resets,
+        "termination_counts": termination_counts,
         "finite": finite_state,
     }
     if not finite_state or unexpected_resets or maximum_mate_drift > 0.002 or minimum_success < 1.0:
@@ -341,11 +360,13 @@ def _run_live_checks(env: Any, report: dict[str, Any]) -> None:
     initial = _insertion_state(raw)
     consecutive_success = 0
     unexpected_resets = 0
+    termination_counts = {}
     for _ in range(180):
         state = _insertion_state(raw)
         action = _scaled_linear_action(raw, state["seat_error_b"])
         observations, reset = _step(env, action)
         unexpected_resets += int(reset)
+        _accumulate_termination_counts(raw, termination_counts)
         success, _, _ = raw._compute_success()
         consecutive_success = consecutive_success + 1 if bool(torch.all(success)) else 0
         if reset or consecutive_success >= 5:
@@ -360,6 +381,7 @@ def _run_live_checks(env: Any, report: dict[str, Any]) -> None:
         "final_success_rate": float(final_success.float().mean().cpu()),
         "consecutive_success_steps": consecutive_success,
         "unexpected_resets": unexpected_resets,
+        "termination_counts": termination_counts,
         "finite": _scene_finite(raw, observations),
     }
     checks["centered_insertion"] = insertion
@@ -379,9 +401,11 @@ def _run_live_checks(env: Any, report: dict[str, Any]) -> None:
     minimum_success = 1.0
     maximum_mate_drift = 0.0
     unexpected_resets = 0
+    termination_counts = {}
     for _ in range(30):
         observations, reset = _step(env, zero)
         unexpected_resets += int(reset)
+        _accumulate_termination_counts(raw, termination_counts)
         state = _insertion_state(raw)
         maximum_mate_drift = max(
             maximum_mate_drift,
@@ -393,6 +417,7 @@ def _run_live_checks(env: Any, report: dict[str, Any]) -> None:
         "maximum_mate_drift_m": maximum_mate_drift,
         "minimum_success_rate": minimum_success,
         "unexpected_resets": unexpected_resets,
+        "termination_counts": termination_counts,
         "finite": _scene_finite(raw, observations),
     }
     if (
@@ -411,6 +436,7 @@ def _run_live_checks(env: Any, report: dict[str, Any]) -> None:
     maximum_overtravel = 0.0
     maximum_success = 0.0
     unexpected_resets = 0
+    termination_counts = {}
     finite_state = True
     for _ in range(30):
         state = _insertion_state(raw)
@@ -419,6 +445,7 @@ def _run_live_checks(env: Any, report: dict[str, Any]) -> None:
         axial_error = torch.sum(state["seat_error_b"] * axis_b, dim=-1, keepdim=True) * axis_b
         observations, reset = _step(env, _scaled_linear_action(raw, axial_error))
         unexpected_resets += int(reset)
+        _accumulate_termination_counts(raw, termination_counts)
         state = _insertion_state(raw)
         overtravel = state["seat_signed_depth_m"] - state["signed_depth_m"]
         maximum_overtravel = max(maximum_overtravel, _maximum(torch.clamp_min(overtravel, 0.0)))
@@ -431,6 +458,7 @@ def _run_live_checks(env: Any, report: dict[str, Any]) -> None:
         "maximum_overtravel_m": maximum_overtravel,
         "maximum_success_rate": maximum_success,
         "unexpected_resets": unexpected_resets,
+        "termination_counts": termination_counts,
         "finite": finite_state,
     }
     if not finite_state or unexpected_resets or maximum_overtravel > 0.0015 or maximum_success > 0.0:

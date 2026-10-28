@@ -28,6 +28,7 @@ from isaaclab_tasks.utils.hydra import resolve_presets
 from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry
 
 import isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s  # noqa: F401
+from isaaclab_training.cli.displayport_solver_sanity import _accumulate_termination_counts
 from isaaclab_training.mdp import DeployOperationalSpaceControllerActionCfg
 from isaaclab_training.mdp import events as deploy_events
 from isaaclab_training.mdp.actions import _pose_rel_action_extra
@@ -84,6 +85,29 @@ _ARM_JOINTS = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "join
 _ENV_ENTRY_POINT = "isaaclab_training.tasks.displayport_insertion.insertion_env:DisplayportInsertionEnv"
 _CFG_PACKAGE = "isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s"
 _AGENT_MODULE = f"{_CFG_PACKAGE}.agents.rsl_rl_ppo_cfg"
+
+
+def test_solver_sanity_accumulates_each_termination_term() -> None:
+    """The live diagnostic must identify which termination caused each reset."""
+
+    class _TerminationManager:
+        active_terms = ["time_out", "plug_dropped", "plug_orientation_exceeded"]
+
+        @staticmethod
+        def get_term(name: str) -> torch.Tensor:
+            values = {
+                "time_out": [False, False, False],
+                "plug_dropped": [True, False, True],
+                "plug_orientation_exceeded": [False, True, True],
+            }
+            return torch.tensor(values[name])
+
+    raw_env = SimpleNamespace(termination_manager=_TerminationManager())
+    counts = {"plug_dropped": 3}
+
+    _accumulate_termination_counts(raw_env, counts)
+
+    assert counts == {"time_out": 0, "plug_dropped": 5, "plug_orientation_exceeded": 2}
 
 
 def _observation_term_names(group: object) -> list[str]:

@@ -361,6 +361,14 @@ def _run_live_checks(
         ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7"],
         preserve_order=True,
     )
+    all_joint_ids, all_joint_names = robot.find_joints([".*"], preserve_order=True)
+    arm_joint_id_set = set(arm_joint_ids)
+    gripper_joint_ids = [joint_id for joint_id in all_joint_ids if joint_id not in arm_joint_id_set]
+    gripper_joint_names = [
+        joint_name
+        for joint_id, joint_name in zip(all_joint_ids, all_joint_names, strict=True)
+        if joint_id not in arm_joint_id_set
+    ]
     flange_pos_0, flange_quat_0 = _flange_pose_in_base(raw)
     grasp_pos_0, grasp_quat_0 = _plug_pose_in_flange(raw)
     joint_pos_0 = _to_torch(robot.data.joint_pos)[:, arm_joint_ids].clone()
@@ -370,6 +378,9 @@ def _run_live_checks(
     maximum_joint_speed = torch.zeros(len(arm_joint_ids), device=raw.device)
     maximum_applied_effort = torch.zeros(len(arm_joint_ids), device=raw.device)
     maximum_computed_effort = torch.zeros(len(arm_joint_ids), device=raw.device)
+    maximum_gripper_speed = torch.zeros(len(gripper_joint_ids), device=raw.device)
+    maximum_gripper_applied_effort = torch.zeros(len(gripper_joint_ids), device=raw.device)
+    maximum_gripper_computed_effort = torch.zeros(len(gripper_joint_ids), device=raw.device)
     maximum_plug_com_velocity = torch.zeros(6, device=raw.device)
     maximum_robot_body_velocity = torch.zeros(6, device=raw.device)
     maximum_flange_translation = 0.0
@@ -402,6 +413,9 @@ def _run_live_checks(
             joint_vel = torch.abs(_to_torch(robot.data.joint_vel)[:, arm_joint_ids])
             applied_effort = torch.abs(_to_torch(robot.data.applied_torque)[:, arm_joint_ids])
             computed_effort = torch.abs(_to_torch(robot.data.computed_torque)[:, arm_joint_ids])
+            gripper_speed = torch.abs(_to_torch(robot.data.joint_vel)[:, gripper_joint_ids])
+            gripper_applied_effort = torch.abs(_to_torch(robot.data.applied_torque)[:, gripper_joint_ids])
+            gripper_computed_effort = torch.abs(_to_torch(robot.data.computed_torque)[:, gripper_joint_ids])
             plug_velocity = torch.abs(_to_torch(plug.data.root_com_vel_w))
             body_velocity = torch.abs(_to_torch(robot.data.body_link_vel_w))
             maximum_joint_delta = torch.maximum(
@@ -411,6 +425,15 @@ def _run_live_checks(
             maximum_joint_speed = torch.maximum(maximum_joint_speed, torch.amax(joint_vel, dim=0))
             maximum_applied_effort = torch.maximum(maximum_applied_effort, torch.amax(applied_effort, dim=0))
             maximum_computed_effort = torch.maximum(maximum_computed_effort, torch.amax(computed_effort, dim=0))
+            maximum_gripper_speed = torch.maximum(maximum_gripper_speed, torch.amax(gripper_speed, dim=0))
+            maximum_gripper_applied_effort = torch.maximum(
+                maximum_gripper_applied_effort,
+                torch.amax(gripper_applied_effort, dim=0),
+            )
+            maximum_gripper_computed_effort = torch.maximum(
+                maximum_gripper_computed_effort,
+                torch.amax(gripper_computed_effort, dim=0),
+            )
             maximum_plug_com_velocity = torch.maximum(
                 maximum_plug_com_velocity,
                 torch.amax(plug_velocity, dim=0),
@@ -450,6 +473,9 @@ def _run_live_checks(
                     "abs_joint_speed_rad_s": torch.amax(joint_vel, dim=0).cpu().tolist(),
                     "abs_computed_effort_nm": torch.amax(computed_effort, dim=0).cpu().tolist(),
                     "abs_applied_effort_nm": torch.amax(applied_effort, dim=0).cpu().tolist(),
+                    "abs_gripper_speed_rad_s": torch.amax(gripper_speed, dim=0).cpu().tolist(),
+                    "abs_gripper_computed_effort_nm": torch.amax(gripper_computed_effort, dim=0).cpu().tolist(),
+                    "abs_gripper_applied_effort_nm": torch.amax(gripper_applied_effort, dim=0).cpu().tolist(),
                     "flange_translation_m": _maximum(torch.linalg.vector_norm(flange_pos - flange_pos_0, dim=-1)),
                     "flange_rotation_rad": _maximum(math_utils.quat_error_magnitude(flange_quat, flange_quat_0)),
                     "grasp_translation_m": _maximum(torch.linalg.vector_norm(grasp_pos - grasp_pos_0, dim=-1)),
@@ -471,10 +497,14 @@ def _run_live_checks(
         "elapsed_simulation_s": probe_steps * raw.step_dt,
         "first_step": first_step,
         "arm_joint_names": list(arm_joint_names),
+        "gripper_joint_names": gripper_joint_names,
         "maximum_abs_joint_delta_rad": maximum_joint_delta.cpu().tolist(),
         "maximum_abs_joint_speed_rad_s": maximum_joint_speed.cpu().tolist(),
         "maximum_abs_computed_effort_nm": maximum_computed_effort.cpu().tolist(),
         "maximum_abs_applied_effort_nm": maximum_applied_effort.cpu().tolist(),
+        "maximum_abs_gripper_speed_rad_s": maximum_gripper_speed.cpu().tolist(),
+        "maximum_abs_gripper_computed_effort_nm": maximum_gripper_computed_effort.cpu().tolist(),
+        "maximum_abs_gripper_applied_effort_nm": maximum_gripper_applied_effort.cpu().tolist(),
         "maximum_flange_translation_m": maximum_flange_translation,
         "maximum_flange_rotation_rad": maximum_flange_rotation,
         "maximum_grasp_translation_m": maximum_grasp_translation,

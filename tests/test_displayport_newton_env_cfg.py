@@ -28,7 +28,10 @@ from isaaclab_tasks.utils.hydra import resolve_presets
 from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry
 
 import isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s  # noqa: F401
-from isaaclab_training.cli.displayport_solver_sanity import _accumulate_termination_counts
+from isaaclab_training.cli.displayport_solver_sanity import (
+    _accumulate_termination_counts,
+    _disable_gripper_squeeze,
+)
 from isaaclab_training.mdp import DeployOperationalSpaceControllerActionCfg
 from isaaclab_training.mdp import events as deploy_events
 from isaaclab_training.mdp.actions import _pose_rel_action_extra
@@ -108,6 +111,16 @@ def test_solver_sanity_accumulates_each_termination_term() -> None:
     _accumulate_termination_counts(raw_env, counts)
 
     assert counts == {"time_out": 0, "plug_dropped": 5, "plug_orientation_exceeded": 2}
+
+
+def test_solver_sanity_disables_reset_squeeze_after_preset_resolution() -> None:
+    """The VBD probe must match the gripper target to its reset state."""
+    env_cfg = SimpleNamespace(hand_hold_width=-0.05, hand_close_width=-0.155)
+
+    _disable_gripper_squeeze(env_cfg)
+
+    assert env_cfg.hand_hold_width == pytest.approx(-0.05)
+    assert env_cfg.hand_close_width == pytest.approx(-0.05)
 
 
 def _observation_term_names(group: object) -> list[str]:

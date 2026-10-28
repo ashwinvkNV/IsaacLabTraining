@@ -243,6 +243,96 @@ def _gravity_compensation_snapshot(robot: Any, gravity_m_s2: float = 9.81) -> di
     }
 
 
+def _disable_gripper_squeeze(env_cfg: Any) -> None:
+    """Match the gripper target to its reset state after preset resolution."""
+    env_cfg.hand_close_width = env_cfg.hand_hold_width
+
+
+def _newton_dynamics_snapshot(raw_env: Any) -> dict[str, Any]:
+    """Return effective robot inertias and Newton's internal joint-drive state."""
+    import torch
+
+    robot = raw_env.scene["robot"]
+    body_mass = _to_torch(robot.data.body_mass)[0].detach().cpu()
+    body_inertia = _to_torch(robot.data.body_inertia)[0].detach().cpu().reshape(-1, 3, 3)
+    bodies = []
+    for body_name, mass, inertia in zip(robot.body_names, body_mass, body_inertia, strict=True):
+        symmetric_inertia = 0.5 * (inertia + inertia.T)
+        bodies.append(
+            {
+                "name": body_name,
+                "mass_kg": float(mass),
+                "inertia_kg_m2": inertia.tolist(),
+                "minimum_inertia_eigenvalue_kg_m2": float(torch.linalg.eigvalsh(symmetric_inertia).amin()),
+            }
+        )
+
+    manager = raw_env.sim.physics_manager
+    model = getattr(manager, "_model", None)
+    state = getattr(manager, "_state_0", None)
+    control = getattr(manager, "_control", None)
+    if model is None or state is None or control is None:
+        return {"bodies": bodies, "joint_drives_available": False}
+
+    required = (
+        model.joint_q_start,
+        model.joint_qd_start,
+        model.joint_target_ke,
+        model.joint_target_kd,
+        model.joint_limit_lower,
+        model.joint_limit_upper,
+        state.joint_q,
+        state.joint_qd,
+        control.joint_target_q,
+        control.joint_target_qd,
+    )
+    if any(value is None for value in required):
+        return {"bodies": bodies, "joint_drives_available": False}
+
+    q_start = _to_torch(model.joint_q_start).detach().cpu().tolist()
+    qd_start = _to_torch(model.joint_qd_start).detach().cpu().tolist()
+    q = _to_torch(state.joint_q).detach().cpu()
+    qd = _to_torch(state.joint_qd).detach().cpu()
+    target_q = _to_torch(control.joint_target_q).detach().cpu()
+    target_qd = _to_torch(control.joint_target_qd).detach().cpu()
+    target_ke = _to_torch(model.joint_target_ke).detach().cpu()
+    target_kd = _to_torch(model.joint_target_kd).detach().cpu()
+    lower = _to_torch(model.joint_limit_lower).detach().cpu()
+    upper = _to_torch(model.joint_limit_upper).detach().cpu()
+    robot_joint_tokens = (
+        "joint1",
+        "joint2",
+        "joint3",
+        "joint4",
+        "joint5",
+        "joint6",
+        "joint7",
+        "finger_joint",
+        "knuckle_joint",
+        "outer_finger_joint",
+    )
+    joints = []
+    for joint_index, joint_label in enumerate(model.joint_label):
+        if not any(token in joint_label for token in robot_joint_tokens):
+            continue
+        coord_start, coord_end = q_start[joint_index : joint_index + 2]
+        dof_start, dof_end = qd_start[joint_index : joint_index + 2]
+        joints.append(
+            {
+                "label": joint_label,
+                "position": q[coord_start:coord_end].tolist(),
+                "target_position": target_q[coord_start:coord_end].tolist(),
+                "velocity": qd[dof_start:dof_end].tolist(),
+                "target_velocity": target_qd[dof_start:dof_end].tolist(),
+                "target_ke": target_ke[dof_start:dof_end].tolist(),
+                "target_kd": target_kd[dof_start:dof_end].tolist(),
+                "limit_lower": lower[dof_start:dof_end].tolist(),
+                "limit_upper": upper[dof_start:dof_end].tolist(),
+            }
+        )
+    return {"bodies": bodies, "joint_drives_available": True, "joints": joints}
+
+
 def _rigid_contact_snapshot(raw_env: Any) -> dict[str, Any]:
     """Return active Newton rigid-contact count, penetration, and force telemetry."""
     import newton
@@ -323,6 +413,8 @@ def _run_live_checks(
         "physics": type(raw.cfg.sim.physics).__name__,
         "solver": type(raw.cfg.sim.physics.solver_cfg).__name__,
         "move_plug_clear": move_plug_clear,
+        "hand_hold_width": float(raw.cfg.hand_hold_width),
+        "hand_close_width": float(raw.cfg.hand_close_width),
     }
     if tuple(controller.motion_stiffness_task) != (300.0,) * 6:
         failures.append("OSC stiffness is not 300 on all six decoupled task axes")
@@ -357,6 +449,7 @@ def _run_live_checks(
         plug.write_root_pose_to_sim(plug_pose)
         plug.write_root_velocity_to_sim(torch.zeros((raw.num_envs, 6), device=raw.device))
         raw.sim.forward()
+    checks["newton_dynamics_at_reset"] = _newton_dynamics_snapshot(raw)
     arm_joint_ids, arm_joint_names = robot.find_joints(
         ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7"],
         preserve_order=True,
@@ -770,6 +863,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--probe_steps", type=int, default=1)
     parser.add_argument("--probe_only", action="store_true")
     parser.add_argument("--move_plug_clear", action="store_true")
+    parser.add_argument("--disable_gripper_squeeze", action="store_true")
     add_launcher_args(parser)
     parser.set_defaults(_setup_preset_cli=setup_preset_cli)
     return parser
@@ -806,6 +900,8 @@ def main() -> int:
         env_cfg.sim.device = args.device or env_cfg.sim.device
         env_cfg.episode_length_s = 60.0
         env_cfg.observations.policy.enable_corruption = False
+        if args.disable_gripper_squeeze:
+            _disable_gripper_squeeze(env_cfg)
         if hasattr(env_cfg.events, "randomize_arm_joint_friction"):
             env_cfg.events.randomize_arm_joint_friction = None
         if hasattr(env_cfg.events, "randomize_arm_pd_gains"):

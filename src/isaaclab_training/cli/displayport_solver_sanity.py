@@ -258,12 +258,20 @@ def _scaled_linear_action(raw_env: Any, physical_delta_b: Any, maximum_step_m: f
     return torch.cat((linear, torch.zeros_like(linear)), dim=-1)
 
 
-def _run_live_checks(env: Any, report: dict[str, Any]) -> None:
+def _run_live_checks(
+    env: Any,
+    report: dict[str, Any],
+    *,
+    probe_steps: int = 1,
+    probe_only: bool = False,
+) -> None:
     """Populate ``report`` with deterministic dynamics and contact evidence."""
     import isaaclab.utils.math as math_utils
     import torch
 
     raw = env.unwrapped
+    if probe_steps < 1:
+        raise ValueError(f"probe_steps must be positive, got {probe_steps}.")
     zero = torch.zeros((raw.num_envs, raw.action_manager.total_action_dim), device=raw.device)
     checks: dict[str, Any] = report["checks"]
     failures: list[str] = report["failures"]
@@ -318,48 +326,110 @@ def _run_live_checks(env: Any, report: dict[str, Any]) -> None:
     joint_pos_0 = _to_torch(robot.data.joint_pos)[:, arm_joint_ids].clone()
     plug_pos_0 = _to_torch(plug.data.root_pos_w).clone()
     plug_quat_0 = _to_torch(plug.data.root_quat_w).clone()
+    maximum_joint_delta = torch.zeros(len(arm_joint_ids), device=raw.device)
+    maximum_joint_speed = torch.zeros(len(arm_joint_ids), device=raw.device)
+    maximum_applied_effort = torch.zeros(len(arm_joint_ids), device=raw.device)
+    maximum_computed_effort = torch.zeros(len(arm_joint_ids), device=raw.device)
+    maximum_plug_com_velocity = torch.zeros(6, device=raw.device)
+    maximum_robot_body_velocity = torch.zeros(6, device=raw.device)
+    maximum_flange_translation = 0.0
+    maximum_flange_rotation = 0.0
+    maximum_grasp_translation = 0.0
+    maximum_grasp_rotation = 0.0
+    maximum_plug_translation = 0.0
+    maximum_plug_rotation = 0.0
+    physical_termination_counts = {
+        "plug_dropped": 0,
+        "plug_orientation_exceeded": 0,
+    }
+    unexpected_reset = False
+    finite_state = True
+    observations = None
     original_termination_params = _suspend_grasp_terminations(raw)
     try:
-        observations, reset = _step(env, zero)
-        physical_termination_counts = {
-            term_name: _evaluate_termination(raw, term_name, params)
-            for term_name, params in original_termination_params.items()
-        }
+        for _ in range(probe_steps):
+            observations, reset = _step(env, zero)
+            unexpected_reset |= reset
+            for term_name, params in original_termination_params.items():
+                physical_termination_counts[term_name] = max(
+                    physical_termination_counts[term_name],
+                    _evaluate_termination(raw, term_name, params),
+                )
+            flange_pos, flange_quat = _flange_pose_in_base(raw)
+            grasp_pos, grasp_quat = _plug_pose_in_flange(raw)
+            joint_pos = _to_torch(robot.data.joint_pos)[:, arm_joint_ids]
+            joint_vel = torch.abs(_to_torch(robot.data.joint_vel)[:, arm_joint_ids])
+            applied_effort = torch.abs(_to_torch(robot.data.applied_torque)[:, arm_joint_ids])
+            computed_effort = torch.abs(_to_torch(robot.data.computed_torque)[:, arm_joint_ids])
+            plug_velocity = torch.abs(_to_torch(plug.data.root_com_vel_w))
+            body_velocity = torch.abs(_to_torch(robot.data.body_link_vel_w))
+            maximum_joint_delta = torch.maximum(
+                maximum_joint_delta,
+                torch.amax(torch.abs(joint_pos - joint_pos_0), dim=0),
+            )
+            maximum_joint_speed = torch.maximum(maximum_joint_speed, torch.amax(joint_vel, dim=0))
+            maximum_applied_effort = torch.maximum(maximum_applied_effort, torch.amax(applied_effort, dim=0))
+            maximum_computed_effort = torch.maximum(maximum_computed_effort, torch.amax(computed_effort, dim=0))
+            maximum_plug_com_velocity = torch.maximum(
+                maximum_plug_com_velocity,
+                torch.amax(plug_velocity, dim=0),
+            )
+            maximum_robot_body_velocity = torch.maximum(
+                maximum_robot_body_velocity,
+                torch.amax(body_velocity, dim=(0, 1)),
+            )
+            maximum_flange_translation = max(
+                maximum_flange_translation,
+                _maximum(torch.linalg.vector_norm(flange_pos - flange_pos_0, dim=-1)),
+            )
+            maximum_flange_rotation = max(
+                maximum_flange_rotation,
+                _maximum(math_utils.quat_error_magnitude(flange_quat, flange_quat_0)),
+            )
+            maximum_grasp_translation = max(
+                maximum_grasp_translation,
+                _maximum(torch.linalg.vector_norm(grasp_pos - grasp_pos_0, dim=-1)),
+            )
+            maximum_grasp_rotation = max(
+                maximum_grasp_rotation,
+                _maximum(math_utils.quat_error_magnitude(grasp_quat, grasp_quat_0)),
+            )
+            maximum_plug_translation = max(
+                maximum_plug_translation,
+                _maximum(torch.linalg.vector_norm(_to_torch(plug.data.root_pos_w) - plug_pos_0, dim=-1)),
+            )
+            maximum_plug_rotation = max(
+                maximum_plug_rotation,
+                _maximum(math_utils.quat_error_magnitude(_to_torch(plug.data.root_quat_w), plug_quat_0)),
+            )
+            finite_state &= _scene_finite(raw, observations)
     finally:
         _restore_termination_params(raw, original_termination_params)
-    flange_pos_1, flange_quat_1 = _flange_pose_in_base(raw)
-    grasp_pos_1, grasp_quat_1 = _plug_pose_in_flange(raw)
-    joint_pos_1 = _to_torch(robot.data.joint_pos)[:, arm_joint_ids]
-    joint_vel_1 = torch.abs(_to_torch(robot.data.joint_vel)[:, arm_joint_ids])
-    applied_effort = torch.abs(_to_torch(robot.data.applied_torque)[:, arm_joint_ids])
-    computed_effort = torch.abs(_to_torch(robot.data.computed_torque)[:, arm_joint_ids])
-    plug_velocity = torch.abs(_to_torch(plug.data.root_com_vel_w))
-    body_velocity = torch.abs(_to_torch(robot.data.body_link_vel_w))
     one_step = {
+        "probe_steps": probe_steps,
+        "elapsed_simulation_s": probe_steps * raw.step_dt,
         "arm_joint_names": list(arm_joint_names),
-        "maximum_abs_joint_delta_rad": torch.amax(torch.abs(joint_pos_1 - joint_pos_0), dim=0).cpu().tolist(),
-        "maximum_abs_joint_speed_rad_s": torch.amax(joint_vel_1, dim=0).cpu().tolist(),
-        "maximum_abs_computed_effort_nm": torch.amax(computed_effort, dim=0).cpu().tolist(),
-        "maximum_abs_applied_effort_nm": torch.amax(applied_effort, dim=0).cpu().tolist(),
-        "maximum_flange_translation_m": _maximum(torch.linalg.vector_norm(flange_pos_1 - flange_pos_0, dim=-1)),
-        "maximum_flange_rotation_rad": _maximum(math_utils.quat_error_magnitude(flange_quat_1, flange_quat_0)),
-        "maximum_grasp_translation_m": _maximum(torch.linalg.vector_norm(grasp_pos_1 - grasp_pos_0, dim=-1)),
-        "maximum_grasp_rotation_rad": _maximum(math_utils.quat_error_magnitude(grasp_quat_1, grasp_quat_0)),
-        "maximum_plug_translation_m": _maximum(
-            torch.linalg.vector_norm(_to_torch(plug.data.root_pos_w) - plug_pos_0, dim=-1)
-        ),
-        "maximum_plug_rotation_rad": _maximum(
-            math_utils.quat_error_magnitude(_to_torch(plug.data.root_quat_w), plug_quat_0)
-        ),
-        "maximum_abs_plug_com_velocity": torch.amax(plug_velocity, dim=0).cpu().tolist(),
-        "maximum_abs_robot_body_velocity": torch.amax(body_velocity, dim=(0, 1)).cpu().tolist(),
+        "maximum_abs_joint_delta_rad": maximum_joint_delta.cpu().tolist(),
+        "maximum_abs_joint_speed_rad_s": maximum_joint_speed.cpu().tolist(),
+        "maximum_abs_computed_effort_nm": maximum_computed_effort.cpu().tolist(),
+        "maximum_abs_applied_effort_nm": maximum_applied_effort.cpu().tolist(),
+        "maximum_flange_translation_m": maximum_flange_translation,
+        "maximum_flange_rotation_rad": maximum_flange_rotation,
+        "maximum_grasp_translation_m": maximum_grasp_translation,
+        "maximum_grasp_rotation_rad": maximum_grasp_rotation,
+        "maximum_plug_translation_m": maximum_plug_translation,
+        "maximum_plug_rotation_rad": maximum_plug_rotation,
+        "maximum_abs_plug_com_velocity": maximum_plug_com_velocity.cpu().tolist(),
+        "maximum_abs_robot_body_velocity": maximum_robot_body_velocity.cpu().tolist(),
         "physical_termination_counts": physical_termination_counts,
-        "unexpected_reset": reset,
-        "finite": _scene_finite(raw, observations),
+        "unexpected_reset": unexpected_reset,
+        "finite": finite_state,
     }
     checks["one_step_without_autoreset"] = one_step
-    if reset:
+    if unexpected_reset:
         failures.append("one-step diagnostic reset despite suspended grasp terminations")
+    if probe_only:
+        return
 
     # The arm and grasp must remain stable under a zero relative-pose command.
     _configure_reset(raw, at_goal=False, depth_m=0.04)
@@ -604,6 +674,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num_envs", type=int, default=4)
     parser.add_argument("--seed", type=int, default=123)
     parser.add_argument("--report", default="artifacts/displayport_solver_sanity.json")
+    parser.add_argument("--probe_steps", type=int, default=1)
+    parser.add_argument("--probe_only", action="store_true")
     add_launcher_args(parser)
     parser.set_defaults(_setup_preset_cli=setup_preset_cli)
     return parser
@@ -649,7 +721,7 @@ def main() -> int:
             env = None
             try:
                 env = gym.make(args.task, cfg=env_cfg)
-                _run_live_checks(env, report)
+                _run_live_checks(env, report, probe_steps=args.probe_steps, probe_only=args.probe_only)
             finally:
                 output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
                 if env is not None:

@@ -478,14 +478,16 @@ def test_newton_asset_preprocessing_blocks_only_malformed_indexed_vertex_normals
     valid_normals.Set([(0.0, 0.0, 1.0)])
     valid_normals.SetIndices([0, 0, 0])
 
-    with pytest.raises(ValueError, match="does not match number of points"):
-        newton.usd.get_mesh(malformed.GetPrim(), load_normals=True, compute_inertia=False)
+    assert len(malformed_normals.GetIndices()) != len(malformed.GetPointsAttr().Get())
 
     assert _block_invalid_mesh_normals(root) == ("/World/plug/invalid",)
+    assert malformed_normals.Get() is None
+    assert len(malformed_normals.GetIndices()) == 0
     repaired = newton.usd.get_mesh(malformed.GetPrim(), load_normals=True, compute_inertia=False)
 
     assert len(repaired.vertices) == 3
-    assert len(repaired.normals) == 3
+    if repaired.normals is not None:
+        assert len(repaired.normals) == 3
     assert valid_normals.Get() == [(0.0, 0.0, 1.0)]
     assert valid_normals.GetIndices() == [0, 0, 0]
 

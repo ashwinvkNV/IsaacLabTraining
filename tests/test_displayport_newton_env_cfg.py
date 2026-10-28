@@ -63,6 +63,7 @@ from isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s.t
     Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg,
     Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg_PLAY,
     _block_invalid_mesh_normals,
+    _flatten_rizon_gripper_mimic_chains,
     _is_valid_diagonal_inertia,
     _is_valid_principal_axes,
     _spawn_plug_with_validated_sdf_meshes,
@@ -449,6 +450,72 @@ def test_newton_flange_inertia_matches_documented_fallback():
         _uniform_sphere_inertia(0.0)
 
 
+def test_newton_rizon_preprocessing_flattens_physx_mimic_chains_for_import():
+    """The validated gripper chain must retain its motion while becoming importable by Newton."""
+    import newton
+    from pxr import Sdf, Usd, UsdGeom, UsdPhysics
+
+    stage = Usd.Stage.CreateInMemory()
+    root = UsdGeom.Xform.Define(stage, "/World/Robot").GetPrim()
+    gripper = "/World/Robot/Grav_gripper"
+    body_paths = (
+        f"{gripper}/gripper_base",
+        f"{gripper}/left_outer_knuckle",
+        f"{gripper}/right_outer_knuckle",
+        f"{gripper}/right_inner_knuckle",
+        f"{gripper}/right_finger_mount",
+    )
+    for body_path in body_paths:
+        body = UsdGeom.Xform.Define(stage, body_path).GetPrim()
+        UsdPhysics.RigidBodyAPI.Apply(body)
+    UsdPhysics.ArticulationRootAPI.Apply(stage.GetPrimAtPath(body_paths[0]))
+
+    def define_joint(path: str, body_0: str, body_1: str):
+        joint = UsdPhysics.RevoluteJoint.Define(stage, path)
+        joint.CreateBody0Rel().SetTargets([body_0])
+        joint.CreateBody1Rel().SetTargets([body_1])
+        joint.CreateAxisAttr("X")
+        return joint.GetPrim()
+
+    driver_path = f"{gripper}/finger_joint"
+    intermediate_path = f"{gripper}/gripper_base/right_outer_knuckle_joint"
+    right_inner_path = f"{gripper}/gripper_base/right_inner_knuckle_joint"
+    right_outer_finger_path = f"{gripper}/right_outer_knuckle/right_outer_finger_joint"
+    define_joint(driver_path, body_paths[0], body_paths[1])
+    intermediate = define_joint(intermediate_path, body_paths[0], body_paths[2])
+    right_inner = define_joint(right_inner_path, body_paths[0], body_paths[3])
+    right_outer_finger = define_joint(right_outer_finger_path, body_paths[2], body_paths[4])
+
+    def apply_mimic(joint, reference_path: str, *, gearing: float | None = None) -> None:
+        joint.SetMetadata("apiSchemas", Sdf.TokenListOp.CreateExplicit(["PhysxMimicJointAPI:rotX"]))
+        joint.CreateRelationship("physxMimicJoint:rotX:referenceJoint").SetTargets([reference_path])
+        if gearing is not None:
+            joint.CreateAttribute("physxMimicJoint:rotX:gearing", Sdf.ValueTypeNames.Float).Set(gearing)
+
+    apply_mimic(intermediate, driver_path, gearing=-1.0)
+    apply_mimic(right_inner, intermediate_path, gearing=-1.0)
+    apply_mimic(right_outer_finger, intermediate_path)
+
+    with pytest.raises(ValueError, match="already (a mimic joint|referenced by another mimic joint)"):
+        newton.ModelBuilder().add_usd(stage, root_path="/World/Robot")
+
+    assert _flatten_rizon_gripper_mimic_chains(root) == (right_inner_path, right_outer_finger_path)
+    assert _flatten_rizon_gripper_mimic_chains(root) == ()
+    builder = newton.ModelBuilder()
+    import_result = builder.add_usd(stage, root_path="/World/Robot")
+    path_joint_map = import_result["path_joint_map"]
+    driver_index = path_joint_map[driver_path]
+
+    for follower_path, expected_multiplier in (
+        (intermediate_path, 1.0),
+        (right_inner_path, 1.0),
+        (right_outer_finger_path, -1.0),
+    ):
+        follower_index = path_joint_map[follower_path]
+        assert builder.joint_mimic_joint[follower_index] == driver_index
+        assert builder.joint_mimic_coeffs[follower_index] == pytest.approx((0.0, expected_multiplier))
+
+
 def test_newton_asset_preprocessing_blocks_only_malformed_indexed_vertex_normals():
     """Malformed visual normals must be regenerated without changing mesh topology."""
     import newton
@@ -513,6 +580,7 @@ def test_newton_flange_inertia_is_authored_before_multi_env_clone(monkeypatch: p
         return robot
 
     monkeypatch.setattr(newton_cfg, "spawn_from_usd", spawn_zero_inertia_robot)
+    monkeypatch.setattr(newton_cfg, "_flatten_rizon_gripper_mimic_chains", lambda _prim: ())
 
     spawned = _spawn_rizon_with_validated_flange_inertia(
         "/World/envs/env_.*/Robot",

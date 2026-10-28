@@ -158,6 +158,70 @@ def _is_valid_principal_axes(quaternion: object) -> bool:
     return math.isclose(sum(value * value for value in values), 1.0, rel_tol=1.0e-5, abs_tol=1.0e-5)
 
 
+def _flatten_rizon_gripper_mimic_chains(root_prim) -> tuple[str, ...]:
+    """Retarget the Rizon gripper's chained mimics to their equivalent direct driver."""
+    from pxr import Sdf
+
+    root_path = root_prim.GetPath()
+    driver_path = root_path.AppendPath(Sdf.Path("Grav_gripper/finger_joint"))
+    intermediate_path = root_path.AppendPath(Sdf.Path("Grav_gripper/gripper_base/right_outer_knuckle_joint"))
+    follower_specs = (
+        ("Grav_gripper/gripper_base/right_inner_knuckle_joint", -1.0),
+        ("Grav_gripper/right_outer_knuckle/right_outer_finger_joint", 1.0),
+    )
+    stage = root_prim.GetStage()
+
+    def _mimic_state(joint_path: Sdf.Path, default_gearing: float) -> tuple[object, Sdf.Path, float, float]:
+        joint = stage.GetPrimAtPath(joint_path)
+        if not joint.IsValid():
+            raise ValueError(f"Rizon USD is missing required gripper joint {joint_path}.")
+        relationship = joint.GetRelationship("physxMimicJoint:rotX:referenceJoint")
+        targets = relationship.GetTargets() if relationship else []
+        if len(targets) != 1:
+            raise ValueError(
+                f"Rizon gripper joint {joint_path} must have exactly one mimic reference, got {targets!r}."
+            )
+        gearing_attr = joint.GetAttribute("physxMimicJoint:rotX:gearing")
+        offset_attr = joint.GetAttribute("physxMimicJoint:rotX:offset")
+        gearing = float(gearing_attr.Get()) if gearing_attr and gearing_attr.HasValue() else default_gearing
+        offset = float(offset_attr.Get()) if offset_attr and offset_attr.HasValue() else 0.0
+        return relationship, targets[0], gearing, offset
+
+    _, intermediate_target, intermediate_gearing, intermediate_offset = _mimic_state(intermediate_path, -1.0)
+    if (
+        intermediate_target != driver_path
+        or not math.isclose(intermediate_gearing, -1.0)
+        or not math.isclose(intermediate_offset, 0.0)
+    ):
+        raise ValueError(
+            "Rizon right-outer-knuckle mimic no longer matches the validated gripper chain: "
+            f"target={intermediate_target}, gearing={intermediate_gearing}, offset={intermediate_offset}."
+        )
+
+    rewired = []
+    for relative_path, expected_gearing in follower_specs:
+        follower_path = root_path.AppendPath(Sdf.Path(relative_path))
+        relationship, target, gearing, offset = _mimic_state(follower_path, expected_gearing)
+        if not math.isclose(gearing, expected_gearing) or not math.isclose(offset, 0.0):
+            raise ValueError(
+                f"Rizon gripper mimic {follower_path} no longer matches the validated coefficients: "
+                f"gearing={gearing}, offset={offset}."
+            )
+        if target == driver_path:
+            continue
+        if target != intermediate_path:
+            raise ValueError(
+                f"Rizon gripper mimic {follower_path} must reference {intermediate_path} or {driver_path}, got {target}."
+            )
+        relationship.SetTargets([driver_path])
+        rewired.append(str(follower_path))
+
+    flattened = tuple(rewired)
+    if flattened:
+        _LOGGER.info("Flattened Rizon gripper mimic chains for Newton: %s", flattened)
+    return flattened
+
+
 @clone
 def _spawn_rizon_with_validated_flange_inertia(
     prim_path: str,
@@ -183,13 +247,14 @@ def _spawn_rizon_with_validated_flange_inertia(
     if _is_valid_diagonal_inertia(diagonal):
         if not _is_valid_principal_axes(principal_axes):
             raise ValueError(f"Rizon flange {flange.GetPath()} must have normalized principal axes.")
-        return prim
+    else:
+        mass = mass_api.GetMassAttr().Get()
+        diagonal = _uniform_sphere_inertia(float(mass) if mass is not None else float("nan"))
+        mass_api.GetDiagonalInertiaAttr().Set(Gf.Vec3f(*diagonal))
+        mass_api.GetPrincipalAxesAttr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
+        _LOGGER.info("Authored deterministic flange inertia %s kg*m^2 for Newton asset %s.", diagonal, cfg.usd_path)
 
-    mass = mass_api.GetMassAttr().Get()
-    diagonal = _uniform_sphere_inertia(float(mass) if mass is not None else float("nan"))
-    mass_api.GetDiagonalInertiaAttr().Set(Gf.Vec3f(*diagonal))
-    mass_api.GetPrincipalAxesAttr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
-    _LOGGER.info("Authored deterministic flange inertia %s kg*m^2 for Newton asset %s.", diagonal, cfg.usd_path)
+    _flatten_rizon_gripper_mimic_chains(prim)
     return prim
 
 

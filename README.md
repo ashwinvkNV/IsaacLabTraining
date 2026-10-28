@@ -151,7 +151,7 @@ uv run isaaclab train_multigpu --num_gpus 4 \
 The production fixed profile uses stable Newton 1.6 and the MJWarp solver,
 point-SDF contacts with a 5 mm gap, a 2 kHz solver rate, a 200 Hz collision
 refresh rate, and a 33.3 Hz policy rate. It uses torque-level OSC with full
-inertial-dynamics decoupling, stiffness `[300, 300, 300, 30, 30, 30]`, damping
+inertial-dynamics decoupling, stiffness `[300, 300, 300, 300, 300, 300]`, damping
 ratio `1`, and translation scales `[0.025, 0.025, 0.010]`. The arm uses
 zero-gain IdealPD actuator groups with Newton-native effort saturation and
 configured solver velocity limits; OSC remains the joint-effort source. Socket-position noise

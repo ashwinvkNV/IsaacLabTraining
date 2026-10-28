@@ -168,12 +168,16 @@ def _scene_finite(raw_env: Any, observations: Any) -> bool:
         observations,
         robot.data.joint_pos,
         robot.data.joint_vel,
+        robot.data.joint_acc,
         robot.data.body_pos_w,
         robot.data.body_quat_w,
+        robot.data.body_link_vel_w,
         plug.data.root_pos_w,
         plug.data.root_quat_w,
+        plug.data.root_com_vel_w,
         socket.data.root_pos_w,
         socket.data.root_quat_w,
+        socket.data.root_com_vel_w,
     )
 
 
@@ -275,13 +279,25 @@ def _run_live_checks(env: Any, report: dict[str, Any]) -> None:
             signed_response = _minimum(position_1[:, axis] - position_0[:, axis])
             response = signed_response
             passed = 0.0001 < signed_response < 0.05
+            evidence = {"axis": axis, "signed_response": response}
         else:
-            response = _minimum(math_utils.quat_error_magnitude(quaternion_1, quaternion_0))
-            passed = 0.0005 < response < 0.2
+            rotvec_b = math_utils.quat_box_minus(quaternion_1, quaternion_0)
+            commanded_axis = axis - 3
+            response = _minimum(rotvec_b[:, commanded_axis])
+            total_response = _maximum(torch.linalg.vector_norm(rotvec_b, dim=-1))
+            cross_axis = rotvec_b.clone()
+            cross_axis[:, commanded_axis] = 0.0
+            cross_axis_response = _maximum(torch.linalg.vector_norm(cross_axis, dim=-1))
+            passed = 0.0005 < response < 0.2 and total_response < 0.2
+            evidence = {
+                "axis": axis,
+                "signed_response": response,
+                "total_response": total_response,
+                "cross_axis_response": cross_axis_response,
+            }
         axis_evidence.append(
             {
-                "axis": axis,
-                "response": response,
+                **evidence,
                 "unexpected_resets": reset_count,
                 "finite": _scene_finite(raw, observations),
             }
@@ -417,7 +433,7 @@ def _run_live_checks(env: Any, report: dict[str, Any]) -> None:
         "unexpected_resets": unexpected_resets,
         "finite": finite_state,
     }
-    if not finite_state or maximum_overtravel > 0.0015 or maximum_success > 0.0:
+    if not finite_state or unexpected_resets or maximum_overtravel > 0.0015 or maximum_success > 0.0:
         failures.append("rim-offset plug tunneled through or falsely succeeded against the socket")
 
 

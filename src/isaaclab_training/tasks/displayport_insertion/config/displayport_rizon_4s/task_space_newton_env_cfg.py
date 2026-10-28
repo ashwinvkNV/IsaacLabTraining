@@ -66,6 +66,19 @@ _NEWTON_MAX_TRIANGLE_PAIRS = 2**25
 # capacity; the 256-environment gate must remain free of overflow warnings.
 _VBD_MAX_TRIANGLE_PAIRS = (1 << 20) - 1
 _VBD_BODY_CONTACT_BUFFER_SIZE = 1024
+_VBD_MINIMUM_RIZON_BODY_MASS = 0.01
+_VBD_MINIMUM_RIZON_INERTIA = 1.0e-5
+_VBD_REGULARIZED_RIZON_BODY_PATHS = (
+    "flange",
+    "Grav_gripper/left_outer_knuckle",
+    "Grav_gripper/left_finger_mount",
+    "Grav_gripper/left_finger_tip",
+    "Grav_gripper/left_inner_knuckle",
+    "Grav_gripper/right_inner_knuckle",
+    "Grav_gripper/right_outer_knuckle",
+    "Grav_gripper/right_finger_mount",
+    "Grav_gripper/right_finger_tip",
+)
 _FLANGE_FALLBACK_DENSITY = 1000.0
 
 _LOGGER = logging.getLogger(__name__)
@@ -243,22 +256,13 @@ def _flatten_rizon_gripper_mimic_chains(root_prim) -> tuple[str, ...]:
     return flattened
 
 
-@clone
-def _spawn_rizon_with_validated_flange_inertia(
-    prim_path: str,
-    cfg,
-    translation: tuple[float, float, float] | None = None,
-    orientation: tuple[float, float, float, float] | None = None,
-    **kwargs,
-):
-    """Spawn Rizon and author the deterministic Newton fallback inertia when needed."""
-    prim = spawn_from_usd(prim_path, cfg, translation, orientation, **kwargs)
-
+def _validate_or_author_flange_inertia(prim, usd_path: str) -> None:
+    """Validate the Rizon flange inertia or author Newton's deterministic fallback."""
     from pxr import Gf, UsdPhysics
 
     flange = prim.GetStage().GetPrimAtPath(prim.GetPath().AppendChild("flange"))
     if not flange.IsValid():
-        raise ValueError(f"Rizon USD {cfg.usd_path!r} does not contain the required flange prim.")
+        raise ValueError(f"Rizon USD {usd_path!r} does not contain the required flange prim.")
     mass_api = UsdPhysics.MassAPI(flange)
     if not mass_api:
         raise ValueError(f"Rizon flange {flange.GetPath()} must have UsdPhysics.MassAPI.")
@@ -272,8 +276,89 @@ def _spawn_rizon_with_validated_flange_inertia(
         mass = mass_api.GetMassAttr().Get()
         diagonal = _uniform_sphere_inertia(float(mass) if mass is not None else float("nan"))
         mass_api.GetDiagonalInertiaAttr().Set(Gf.Vec3f(*diagonal))
-        mass_api.GetPrincipalAxesAttr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
-        _LOGGER.info("Authored deterministic flange inertia %s kg*m^2 for Newton asset %s.", diagonal, cfg.usd_path)
+        if not _is_valid_principal_axes(principal_axes):
+            mass_api.GetPrincipalAxesAttr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
+        _LOGGER.info("Authored deterministic flange inertia %s kg*m^2 for Newton asset %s.", diagonal, usd_path)
+
+
+def _regularize_vbd_rizon_body_inertia(root_prim, relative_path: str) -> bool:
+    """Floor one lightweight Rizon body mass and inertia for VBD conditioning."""
+    from pxr import Gf, Sdf, UsdPhysics
+
+    body_path = root_prim.GetPath().AppendPath(Sdf.Path(relative_path))
+    body = root_prim.GetStage().GetPrimAtPath(body_path)
+    if not body.IsValid():
+        raise ValueError(f"Rizon VBD asset does not contain the required body {body_path}.")
+    mass_api = UsdPhysics.MassAPI(body)
+    if not mass_api:
+        raise ValueError(f"Rizon VBD body {body_path} must have UsdPhysics.MassAPI.")
+
+    changed = False
+    mass = mass_api.GetMassAttr().Get()
+    mass = float(mass) if mass is not None else float("nan")
+    inertia_mass_scale = 1.0
+    if not math.isfinite(mass) or mass < _VBD_MINIMUM_RIZON_BODY_MASS:
+        mass_api.GetMassAttr().Set(_VBD_MINIMUM_RIZON_BODY_MASS)
+        if math.isfinite(mass) and mass > 0.0:
+            # Preserve the authored shape and density relationship when the
+            # mass floor increases a valid lightweight body mass.
+            inertia_mass_scale = _VBD_MINIMUM_RIZON_BODY_MASS / mass
+        changed = True
+
+    diagonal = mass_api.GetDiagonalInertiaAttr().Get()
+    principal_axes = mass_api.GetPrincipalAxesAttr().Get()
+    if _is_valid_diagonal_inertia(diagonal):
+        if not _is_valid_principal_axes(principal_axes):
+            raise ValueError(f"Rizon VBD body {body_path} must have normalized principal axes.")
+        values = tuple(float(value) for value in diagonal)
+        scaled_values = tuple(value * inertia_mass_scale for value in values)
+        scale = max(1.0, _VBD_MINIMUM_RIZON_INERTIA / min(scaled_values))
+        scale *= inertia_mass_scale
+        if scale > 1.0:
+            mass_api.GetDiagonalInertiaAttr().Set(Gf.Vec3f(*(value * scale for value in values)))
+            changed = True
+    else:
+        mass_api.GetDiagonalInertiaAttr().Set(Gf.Vec3f(*((_VBD_MINIMUM_RIZON_INERTIA,) * 3)))
+        if not _is_valid_principal_axes(principal_axes):
+            mass_api.GetPrincipalAxesAttr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
+        changed = True
+    return changed
+
+
+@clone
+def _spawn_rizon_with_validated_flange_inertia(
+    prim_path: str,
+    cfg,
+    translation: tuple[float, float, float] | None = None,
+    orientation: tuple[float, float, float, float] | None = None,
+    **kwargs,
+):
+    """Spawn Rizon and author the deterministic Newton fallback inertia when needed."""
+    prim = spawn_from_usd(prim_path, cfg, translation, orientation, **kwargs)
+    _validate_or_author_flange_inertia(prim, cfg.usd_path)
+
+    _flatten_rizon_gripper_mimic_chains(prim)
+    return prim
+
+
+@clone
+def _spawn_rizon_with_vbd_regularized_inertia(
+    prim_path: str,
+    cfg,
+    translation: tuple[float, float, float] | None = None,
+    orientation: tuple[float, float, float, float] | None = None,
+    **kwargs,
+):
+    """Spawn Rizon and condition lightweight moving bodies for the VBD solver."""
+    prim = spawn_from_usd(prim_path, cfg, translation, orientation, **kwargs)
+    _validate_or_author_flange_inertia(prim, cfg.usd_path)
+    regularized = tuple(
+        relative_path
+        for relative_path in _VBD_REGULARIZED_RIZON_BODY_PATHS
+        if _regularize_vbd_rizon_body_inertia(prim, relative_path)
+    )
+    if regularized:
+        _LOGGER.info("Regularized lightweight Rizon bodies for VBD: %s", regularized)
 
     _flatten_rizon_gripper_mimic_chains(prim)
     return prim
@@ -535,7 +620,10 @@ class Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg(Rizon4sTaskSpaceDisplaypo
 
         # Preserve source PhysX offsets on every collider, but apply Newton's
         # point-SDF schema only to meshes authored for SDF collision.
-        self.scene.robot.spawn.func = _spawn_rizon_with_validated_flange_inertia
+        self.scene.robot.spawn.func = preset(
+            default=_spawn_rizon_with_validated_flange_inertia,
+            newton_vbd=_spawn_rizon_with_vbd_regularized_inertia,
+        )
         self.scene.dp_plug.spawn.func = _spawn_plug_with_validated_sdf_meshes
         self.scene.dp_socket.spawn.func = _spawn_socket_with_validated_sdf_meshes
         self.scene.dp_plug.spawn.collision_props = _newton_sdf_properties(

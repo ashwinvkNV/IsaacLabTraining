@@ -72,6 +72,7 @@ from isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s.t
     _is_valid_principal_axes,
     _spawn_plug_with_validated_sdf_meshes,
     _spawn_rizon_with_validated_flange_inertia,
+    _spawn_rizon_with_vbd_regularized_inertia,
     _spawn_socket_with_validated_sdf_meshes,
     _uniform_sphere_inertia,
     _use_explicit_effort_control_arm_actuators,
@@ -635,6 +636,92 @@ def test_newton_flange_inertia_is_authored_before_multi_env_clone(monkeypatch: p
         assert tuple(principal_axes.GetImaginary()) == pytest.approx((0.0, 0.0, 0.0))
 
 
+def test_newton_vbd_regularizes_only_lightweight_rizon_bodies_before_clone(monkeypatch: pytest.MonkeyPatch):
+    """VBD must receive well-conditioned flange and moving-gripper inertias in every environment."""
+    from isaaclab.sim.utils import prims as prim_utils
+    from isaaclab.sim.utils import queries as query_utils
+    from pxr import Gf, Usd, UsdGeom, UsdPhysics
+
+    stage = Usd.Stage.CreateInMemory()
+    for env_index in range(2):
+        UsdGeom.Xform.Define(stage, f"/World/envs/env_{env_index}")
+
+    monkeypatch.setattr(prim_utils, "get_current_stage", lambda: stage)
+    monkeypatch.setattr(query_utils, "get_current_stage", lambda: stage)
+
+    moving_body_paths = (
+        "flange",
+        "Grav_gripper/left_outer_knuckle",
+        "Grav_gripper/left_finger_mount",
+        "Grav_gripper/left_finger_tip",
+        "Grav_gripper/left_inner_knuckle",
+        "Grav_gripper/right_inner_knuckle",
+        "Grav_gripper/right_outer_knuckle",
+        "Grav_gripper/right_finger_mount",
+        "Grav_gripper/right_finger_tip",
+    )
+    authored_inertia = Gf.Vec3f(1.0e-7, 2.0e-7, 2.5e-7)
+    mass_scaled_inertia = Gf.Vec3f(2.0e-6, 3.0e-6, 4.0e-6)
+    authored_axes = Gf.Quatf(0.5, 0.5, 0.5, 0.5)
+    authored_com = Gf.Vec3f(0.001, 0.002, 0.003)
+
+    def spawn_lightweight_robot(prim_path, _cfg, *_args, **_kwargs):
+        robot = UsdGeom.Xform.Define(stage, prim_path).GetPrim()
+        for relative_path in moving_body_paths:
+            body = UsdGeom.Xform.Define(stage, f"{prim_path}/{relative_path}").GetPrim()
+            mass_api = UsdPhysics.MassAPI.Apply(body)
+            if relative_path == "Grav_gripper/left_finger_tip":
+                mass_api.CreateMassAttr(1.0e-3)
+                mass_api.CreateDiagonalInertiaAttr(mass_scaled_inertia)
+            elif relative_path == "Grav_gripper/right_finger_tip":
+                mass_api.CreateMassAttr(1.0e-4)
+                mass_api.CreateDiagonalInertiaAttr(Gf.Vec3f(0.0, 0.0, 0.0))
+            else:
+                mass_api.CreateMassAttr(1.0e-4)
+                mass_api.CreateDiagonalInertiaAttr(authored_inertia)
+            mass_api.CreatePrincipalAxesAttr(authored_axes)
+            mass_api.CreateCenterOfMassAttr(authored_com)
+        gripper_base = UsdGeom.Xform.Define(stage, f"{prim_path}/Grav_gripper/gripper_base").GetPrim()
+        gripper_base_mass = UsdPhysics.MassAPI.Apply(gripper_base)
+        gripper_base_mass.CreateMassAttr(1.0e-4)
+        gripper_base_mass.CreateDiagonalInertiaAttr(authored_inertia)
+        gripper_base_mass.CreatePrincipalAxesAttr(authored_axes)
+        gripper_base_mass.CreateCenterOfMassAttr(authored_com)
+        return robot
+
+    monkeypatch.setattr(newton_cfg, "spawn_from_usd", spawn_lightweight_robot)
+    monkeypatch.setattr(newton_cfg, "_flatten_rizon_gripper_mimic_chains", lambda _prim: ())
+
+    spawn_vbd = newton_cfg._spawn_rizon_with_vbd_regularized_inertia
+    spawned = spawn_vbd(
+        "/World/envs/env_.*/Robot",
+        SimpleNamespace(usd_path="test_rizon.usd"),
+    )
+
+    assert str(spawned.GetPath()) == "/World/envs/env_0/Robot"
+    for env_index in range(2):
+        root_path = f"/World/envs/env_{env_index}/Robot"
+        for relative_path in moving_body_paths:
+            body = stage.GetPrimAtPath(f"{root_path}/{relative_path}")
+            mass_api = UsdPhysics.MassAPI(body)
+            diagonal = tuple(mass_api.GetDiagonalInertiaAttr().Get())
+            assert mass_api.GetMassAttr().Get() == pytest.approx(0.01)
+            if relative_path == "Grav_gripper/left_finger_tip":
+                assert diagonal == pytest.approx((2.0e-5, 3.0e-5, 4.0e-5))
+            elif relative_path == "Grav_gripper/right_finger_tip":
+                assert diagonal == pytest.approx((1.0e-5, 1.0e-5, 1.0e-5))
+            else:
+                assert min(diagonal) == pytest.approx(1.0e-5)
+                assert diagonal[1] / diagonal[0] == pytest.approx(2.0)
+                assert diagonal[2] / diagonal[0] == pytest.approx(2.5)
+            assert mass_api.GetCenterOfMassAttr().Get() == authored_com
+            assert mass_api.GetPrincipalAxesAttr().Get() == authored_axes
+
+        gripper_base = UsdPhysics.MassAPI(stage.GetPrimAtPath(f"{root_path}/Grav_gripper/gripper_base"))
+        assert gripper_base.GetMassAttr().Get() == pytest.approx(1.0e-4)
+        assert tuple(gripper_base.GetDiagonalInertiaAttr().Get()) == pytest.approx(tuple(authored_inertia))
+
+
 def test_newton_flange_rejects_valid_inertia_with_invalid_principal_axes(monkeypatch: pytest.MonkeyPatch):
     """A calibrated asset must not preserve an invalid principal-axis quaternion."""
     from pxr import Gf, Usd, UsdGeom, UsdPhysics
@@ -1175,9 +1262,12 @@ def test_displayport_newton_runner_and_play_preserve_physx_defaults():
 
     train_cfg = Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg()
     play_cfg = Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg_PLAY()
+    mjwarp_cfg = resolve_presets(Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg(), selected=("newton_sdf",))
+    vbd_cfg = resolve_presets(Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg(), selected=("newton_vbd",))
     assert train_cfg.scene.num_envs == 256
     assert train_cfg.sim.use_newton_actuators is True
-    assert train_cfg.scene.robot.spawn.func is _spawn_rizon_with_validated_flange_inertia
+    assert mjwarp_cfg.scene.robot.spawn.func is _spawn_rizon_with_validated_flange_inertia
+    assert vbd_cfg.scene.robot.spawn.func is _spawn_rizon_with_vbd_regularized_inertia
     assert train_cfg.scene.dp_plug.spawn.func is _spawn_plug_with_validated_sdf_meshes
     assert train_cfg.scene.dp_socket.spawn.func is _spawn_socket_with_validated_sdf_meshes
     assert train_cfg.observations.policy.enable_corruption is True

@@ -837,6 +837,36 @@ def test_displayport_newton_vbd_preset_has_stability_profile():
     assert cfg.scene.robot.spawn.joint_drive_props is None
 
 
+def test_displayport_newton_vbd_clamps_gripper_effort_before_solver():
+    """VBD gripper efforts must be clamped outside unsupported solver joint limits."""
+    cfg = resolve_presets(Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg(), selected=("newton_vbd",))
+
+    drive = cfg.scene.robot.actuators["gripper_drive"]
+    assert isinstance(drive, IdealPDActuatorCfg)
+    assert drive.joint_names_expr == ["finger_joint"]
+    assert drive.actuator_effort_limit == pytest.approx(2.0)
+    assert drive.actuator_velocity_limit == pytest.approx(1.0)
+    assert drive.joint_effort_limit == pytest.approx(2.0)
+    assert drive.joint_velocity_limit == pytest.approx(1.0)
+    assert drive.stiffness == pytest.approx(2000.0)
+    assert drive.damping == pytest.approx(10.0)
+    assert drive.armature == pytest.approx(0.0)
+
+    passive = cfg.scene.robot.actuators["gripper_passive"]
+    assert isinstance(passive, IdealPDActuatorCfg)
+    assert passive.joint_names_expr == [".*_knuckle_joint", ".*_outer_finger_joint"]
+    assert passive.actuator_effort_limit == pytest.approx(1.0)
+    assert passive.actuator_velocity_limit == pytest.approx(1.0)
+    assert passive.joint_effort_limit == pytest.approx(1.0)
+    assert passive.joint_velocity_limit == pytest.approx(1.0)
+    assert passive.stiffness == pytest.approx(0.0)
+    assert passive.damping == pytest.approx(0.0)
+    assert passive.armature == pytest.approx(0.0)
+
+    assert cfg.hand_hold_width == pytest.approx(-0.05)
+    assert cfg.hand_close_width == pytest.approx(-0.155)
+
+
 def test_displayport_newton_vbd_collision_capacity_fits_deterministic_contact_ids():
     """VBD contact matching must fit every reducer index in Newton's packed contact ID."""
     from newton._src.geometry.contact_reduction_global import CONTACT_ID_BITS

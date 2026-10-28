@@ -587,26 +587,55 @@ class Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg(Rizon4sTaskSpaceDisplaypo
         )
         _use_explicit_effort_control_arm_actuators(self)
 
-        self.scene.robot.actuators["gripper_drive"] = ImplicitActuatorCfg(
-            joint_names_expr=["finger_joint"],
-            effort_limit_sim=200.0,
-            velocity_limit_sim=2.0,
-            stiffness=2000.0,
-            damping=10.0,
-            friction=0.0,
-            armature=0.1,
+        # VBD does not enforce model joint effort or velocity limits. Execute
+        # its gripper PD explicitly so Isaac Lab clamps the effort before it is
+        # written to ``Control.joint_f``; keep MJWarp's validated implicit drive.
+        self.scene.robot.actuators["gripper_drive"] = preset(
+            default=ImplicitActuatorCfg(
+                joint_names_expr=["finger_joint"],
+                effort_limit_sim=200.0,
+                velocity_limit_sim=2.0,
+                stiffness=2000.0,
+                damping=10.0,
+                friction=0.0,
+                armature=0.1,
+            ),
+            newton_vbd=IdealPDActuatorCfg(
+                joint_names_expr=["finger_joint"],
+                actuator_effort_limit=2.0,
+                actuator_velocity_limit=1.0,
+                joint_effort_limit=2.0,
+                joint_velocity_limit=1.0,
+                stiffness=2000.0,
+                damping=10.0,
+                friction=0.0,
+                armature=0.0,
+            ),
         )
-        self.scene.robot.actuators["gripper_passive"] = ImplicitActuatorCfg(
-            joint_names_expr=[".*_knuckle_joint", ".*_outer_finger_joint"],
-            effort_limit_sim=20.0,
-            velocity_limit_sim=1.0,
-            stiffness=2000.0,
-            damping=10.0,
-            friction=0.0,
-            armature=0.05,
+        self.scene.robot.actuators["gripper_passive"] = preset(
+            default=ImplicitActuatorCfg(
+                joint_names_expr=[".*_knuckle_joint", ".*_outer_finger_joint"],
+                effort_limit_sim=20.0,
+                velocity_limit_sim=1.0,
+                stiffness=2000.0,
+                damping=10.0,
+                friction=0.0,
+                armature=0.05,
+            ),
+            newton_vbd=IdealPDActuatorCfg(
+                joint_names_expr=[".*_knuckle_joint", ".*_outer_finger_joint"],
+                actuator_effort_limit=1.0,
+                actuator_velocity_limit=1.0,
+                joint_effort_limit=1.0,
+                joint_velocity_limit=1.0,
+                stiffness=0.0,
+                damping=0.0,
+                friction=0.0,
+                armature=0.0,
+            ),
         )
-        self.hand_hold_width = -0.1
-        self.hand_close_width = -0.1
+        self.hand_hold_width = preset(default=-0.1, newton_vbd=-0.05)
+        self.hand_close_width = preset(default=-0.1, newton_vbd=-0.155)
 
 
 @configclass

@@ -333,6 +333,154 @@ def _newton_dynamics_snapshot(raw_env: Any) -> dict[str, Any]:
     return {"bodies": bodies, "joint_drives_available": True, "joints": joints}
 
 
+def _pose_residual_snapshot(reference: Any, candidate: Any, labels: list[str]) -> dict[str, Any]:
+    """Return the largest translation and rotation differences between two pose arrays."""
+    import torch
+
+    reference = torch.as_tensor(_to_torch(reference)).detach()
+    candidate = torch.as_tensor(_to_torch(candidate)).detach()
+    if reference.shape != candidate.shape or reference.ndim != 2 or reference.shape[-1] != 7:
+        raise ValueError(
+            "Pose arrays must have matching [body_count, 7] shapes, got "
+            f"{tuple(reference.shape)} and {tuple(candidate.shape)}."
+        )
+    if len(labels) != reference.shape[0]:
+        raise ValueError(f"Expected {reference.shape[0]} labels, got {len(labels)}.")
+
+    translation = torch.linalg.vector_norm(candidate[:, :3] - reference[:, :3], dim=-1)
+    reference_quat = torch.nn.functional.normalize(reference[:, 3:7], dim=-1)
+    candidate_quat = torch.nn.functional.normalize(candidate[:, 3:7], dim=-1)
+    quaternion_dot = torch.sum(reference_quat * candidate_quat, dim=-1).abs().clamp(max=1.0)
+    rotation = 2.0 * torch.acos(quaternion_dot)
+    translation_index = int(torch.argmax(translation).cpu())
+    rotation_index = int(torch.argmax(rotation).cpu())
+    return {
+        "maximum_translation_m": float(translation[translation_index].cpu()),
+        "maximum_translation_body": labels[translation_index],
+        "maximum_rotation_rad": float(rotation[rotation_index].cpu()),
+        "maximum_rotation_body": labels[rotation_index],
+    }
+
+
+def _newton_fk_consistency_snapshot(raw_env: Any) -> dict[str, Any]:
+    """Compare the live Newton body poses with FK and VBD's structural rest poses."""
+    import newton
+
+    manager = raw_env.sim.physics_manager
+    model = getattr(manager, "_model", None)
+    state = getattr(manager, "_state_0", None)
+    if model is None or state is None or state.body_q is None or state.joint_q is None or state.joint_qd is None:
+        return {"available": False}
+
+    expected_state = model.state()
+    newton.eval_fk(model, state.joint_q, state.joint_qd, expected_state)
+    labels = [str(label) for label in model.body_label]
+    return {
+        "available": True,
+        "live_vs_fk": _pose_residual_snapshot(expected_state.body_q, state.body_q, labels),
+        "live_vs_structural_rest": _pose_residual_snapshot(model.body_q, state.body_q, labels),
+        "fk_vs_structural_rest": _pose_residual_snapshot(model.body_q, expected_state.body_q, labels),
+    }
+
+
+def _vbd_structural_snapshot(raw_env: Any) -> dict[str, Any]:
+    """Return VBD's first-step structural residuals and stabilization setting."""
+    import newton
+    import torch
+
+    manager = raw_env.sim.physics_manager
+    model = getattr(manager, "_model", None)
+    solver = getattr(manager, "_solver", None)
+    required = ("joint_C0_lin", "joint_C0_ang", "rigid_joint_alpha")
+    if model is None or solver is None or any(not hasattr(solver, name) for name in required):
+        return {"available": False}
+
+    linear = torch.linalg.vector_norm(torch.as_tensor(_to_torch(solver.joint_C0_lin)).detach(), dim=-1)
+    angular_c0 = torch.as_tensor(_to_torch(solver.joint_C0_ang)).detach()
+    angular = torch.linalg.vector_norm(angular_c0, dim=-1)
+    projected_angular_c0 = angular_c0.clone()
+    joint_type = torch.as_tensor(_to_torch(model.joint_type)).detach()
+    joint_qd_start = torch.as_tensor(_to_torch(model.joint_qd_start)).detach()
+    joint_dof_dim = torch.as_tensor(_to_torch(model.joint_dof_dim)).detach()
+    joint_axis = torch.as_tensor(_to_torch(model.joint_axis)).detach()
+    for joint_index in range(projected_angular_c0.shape[0]):
+        joint_kind = int(joint_type[joint_index].cpu())
+        if joint_kind == int(newton.JointType.REVOLUTE):
+            angular_start = int(joint_qd_start[joint_index].cpu())
+            axis = torch.nn.functional.normalize(joint_axis[angular_start], dim=0)
+            residual = projected_angular_c0[joint_index]
+            projected_angular_c0[joint_index] = residual - torch.dot(residual, axis) * axis
+        elif joint_kind == int(newton.JointType.D6):
+            linear_count = int(joint_dof_dim[joint_index, 0].cpu())
+            angular_count = int(joint_dof_dim[joint_index, 1].cpu())
+            angular_start = int(joint_qd_start[joint_index].cpu()) + linear_count
+            residual = projected_angular_c0[joint_index]
+            for axis_index in range(angular_start, angular_start + angular_count):
+                axis = torch.nn.functional.normalize(joint_axis[axis_index], dim=0)
+                residual = residual - torch.dot(residual, axis) * axis
+            projected_angular_c0[joint_index] = residual
+    projected_angular = torch.linalg.vector_norm(projected_angular_c0, dim=-1)
+    labels = [str(label) for label in model.joint_label]
+    if len(labels) != linear.shape[0] or linear.shape != angular.shape:
+        return {
+            "available": False,
+            "reason": (
+                f"joint labels/residual shapes differ: labels={len(labels)}, "
+                f"linear={tuple(linear.shape)}, angular={tuple(angular.shape)}"
+            ),
+        }
+
+    linear_index = int(torch.argmax(linear).cpu())
+    angular_index = int(torch.argmax(angular).cpu())
+    projected_angular_index = int(torch.argmax(projected_angular).cpu())
+    return {
+        "available": True,
+        "joint_alpha": float(solver.rigid_joint_alpha),
+        "maximum_linear_c0_m": float(linear[linear_index].cpu()),
+        "maximum_linear_c0_joint": labels[linear_index],
+        "maximum_raw_angular_c0_rad": float(angular[angular_index].cpu()),
+        "maximum_raw_angular_c0_joint": labels[angular_index],
+        "maximum_projected_angular_c0_rad": float(projected_angular[projected_angular_index].cpu()),
+        "maximum_projected_angular_c0_joint": labels[projected_angular_index],
+        "joints": [
+            {
+                "label": label,
+                "linear_c0_m": float(linear[index].cpu()),
+                "raw_angular_c0_rad": float(angular[index].cpu()),
+                "projected_angular_c0_rad": float(projected_angular[index].cpu()),
+            }
+            for index, label in enumerate(labels)
+            if (
+                float(linear[index].cpu()) > 0.0
+                or float(angular[index].cpu()) > 0.0
+                or float(projected_angular[index].cpu()) > 0.0
+            )
+        ],
+    }
+
+
+def _robot_body_velocity_snapshot(robot: Any) -> dict[str, Any]:
+    """Return per-body robot linear and angular speeds after a solver step."""
+    import torch
+
+    velocity = torch.as_tensor(_to_torch(robot.data.body_link_vel_w)).detach()
+    linear = torch.amax(torch.linalg.vector_norm(velocity[..., :3], dim=-1), dim=0)
+    angular = torch.amax(torch.linalg.vector_norm(velocity[..., 3:], dim=-1), dim=0)
+    entries = [
+        {
+            "name": name,
+            "linear_speed_m_s": float(linear[index].cpu()),
+            "angular_speed_rad_s": float(angular[index].cpu()),
+        }
+        for index, name in enumerate(robot.body_names)
+    ]
+    return {
+        "maximum_linear_speed_body": max(entries, key=lambda entry: entry["linear_speed_m_s"]),
+        "maximum_angular_speed_body": max(entries, key=lambda entry: entry["angular_speed_rad_s"]),
+        "bodies": entries,
+    }
+
+
 def _rigid_contact_snapshot(raw_env: Any) -> dict[str, Any]:
     """Return active Newton rigid-contact count, penetration, and force telemetry."""
     import newton
@@ -450,6 +598,7 @@ def _run_live_checks(
         plug.write_root_velocity_to_sim(torch.zeros((raw.num_envs, 6), device=raw.device))
         raw.sim.forward()
     checks["newton_dynamics_at_reset"] = _newton_dynamics_snapshot(raw)
+    checks["newton_fk_consistency_at_reset"] = _newton_fk_consistency_snapshot(raw)
     arm_joint_ids, arm_joint_names = robot.find_joints(
         ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7"],
         preserve_order=True,
@@ -581,6 +730,8 @@ def _run_live_checks(
                     ),
                     "abs_plug_com_velocity": torch.amax(plug_velocity, dim=0).cpu().tolist(),
                     "abs_robot_body_velocity": torch.amax(body_velocity, dim=(0, 1)).cpu().tolist(),
+                    "robot_body_velocity": _robot_body_velocity_snapshot(robot),
+                    "vbd_structural": _vbd_structural_snapshot(raw),
                     "rigid_contacts": _rigid_contact_snapshot(raw),
                 }
     finally:

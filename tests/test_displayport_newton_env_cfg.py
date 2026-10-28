@@ -930,6 +930,17 @@ def test_displayport_newton_vbd_preset_has_stability_profile():
     assert solver.rigid_joint_angular_ke == pytest.approx(1.0e5)
     assert solver.rigid_joint_linear_kd == pytest.approx(0.0)
     assert solver.rigid_joint_angular_kd == pytest.approx(0.0)
+    assert solver.rigid_avbd_joint_alpha is None
+
+    # The task-local field must reach SolverVBD instead of being dropped as
+    # configuration-only metadata. This keeps alpha A/Bs honest while leaving
+    # Newton's current compliant-ALM default unchanged.
+    from isaaclab_newton.physics.vbd_manager import NewtonVBDManager
+    from newton.solvers import SolverVBD
+
+    solver_kwargs = NewtonVBDManager._filter_solver_kwargs(SolverVBD, solver)
+    assert "rigid_avbd_joint_alpha" in solver_kwargs
+    assert solver_kwargs["rigid_avbd_joint_alpha"] is None
 
     collision = physics.collision_cfg
     assert collision is not None

@@ -88,6 +88,9 @@ _LOGGER = logging.getLogger(__name__)
 class _DisplayportVBDSolverCfg(VBDSolverCfg):
     """Expose VBD structural-joint material settings for solver diagnostics."""
 
+    rigid_avbd_joint_alpha: float | None = None
+    """Joint residual fraction subtracted as ``C - alpha * C0``, or ``None`` for Newton's mode default."""
+
     rigid_joint_linear_ke: float = 1.0e5
     """Structural linear-joint stiffness [N/m]."""
 

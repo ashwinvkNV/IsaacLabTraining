@@ -166,7 +166,9 @@ change the default MJWarp profile, policy observations or actions, PPO setup,
 reward, assets, or curriculum. The initial VBD profile uses compliant ALM with
 contact history and latest-contact matching, 20 iterations, a 4 kHz solver and
 collision refresh, a 5 mm point-SDF gap, and 2500 N/m contact stiffness with
-50 N*s/m damping. CUDA graph capture remains enabled.
+50 N*s/m damping. Latest-contact matching enables deterministic contact
+reduction, so the shared triangle-pair buffer uses the largest capacity that
+fits Newton's packed contact IDs. CUDA graph capture remains enabled.
 
 This experiment branch pins IsaacLab at
 `4db894c4088075379f6c8508073b83090c3b6ecb` and Newton main at
@@ -184,7 +186,9 @@ on the exact target build and assets:
 4. Run an 8-16 environment, 6-10 iteration diagnostic with synchronous CUDA
    error reporting.
 5. Scale through 64, 128, and 256 environments while checking collision and
-   per-body contact-capacity watermarks before submitting full training.
+   per-body contact-capacity watermarks before submitting full training. The
+   256-environment gate is required because triangle-pair demand grows with the
+   number of replicated worlds while the packed-ID capacity is fixed.
 
 For the first diagnostic, replace `physics=newton_sdf` in the Newton smoke
 command with `physics=newton_vbd`. This profile is a solver experiment, not a

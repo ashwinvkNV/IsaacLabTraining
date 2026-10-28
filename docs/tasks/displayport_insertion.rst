@@ -949,7 +949,9 @@ the solver and its gravity-compensation plumbing. Its initial profile uses
 compliant ALM, contact history with ``latest`` matching, 20 iterations, 40
 substeps per 10 ms outer tick, collision every substep, a 5 mm point-SDF gap,
 and default contact stiffness/damping of 2500 N/m and 50 N*s/m. CUDA graph
-capture is enabled.
+capture is enabled. Latest-contact matching enables deterministic contact
+reduction, so the shared triangle-pair buffer uses the largest capacity that
+fits Newton's packed contact IDs.
 
 This experiment branch pins IsaacLab commit
 ``4db894c4088075379f6c8508073b83090c3b6ecb`` and Newton main commit
@@ -969,7 +971,9 @@ training:
 #. Run an 8--16 environment, 6--10 iteration diagnostic with synchronous CUDA
    error reporting.
 #. Scale through 64, 128, and 256 environments while recording collision and
-   per-body contact-capacity watermarks.
+   per-body contact-capacity watermarks. This final capacity gate is required
+   because triangle-pair demand grows with replicated worlds while the packed-ID
+   capacity is fixed.
 
 Only submit full training after every gate remains stable. Qualify resulting
 checkpoints separately in simulation and on hardware before export or

@@ -807,10 +807,22 @@ def test_displayport_newton_vbd_preset_has_stability_profile():
     assert collision is not None
     assert collision.reduce_contacts is True
     assert collision.contact_matching == "latest"
-    assert collision.max_triangle_pairs == 2**25
+    assert collision.max_triangle_pairs == (1 << 20) - 1
     assert cfg.events.robot_body_gravity_compensation is not None
     assert cfg.scene.robot.spawn.rigid_props.disable_gravity is False
     assert cfg.scene.robot.spawn.joint_drive_props is None
+
+
+def test_displayport_newton_vbd_collision_capacity_fits_deterministic_contact_ids():
+    """VBD contact matching must fit every reducer index in Newton's packed contact ID."""
+    from newton._src.geometry.contact_reduction_global import CONTACT_ID_BITS
+
+    cfg = resolve_presets(Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg(), selected=("newton_vbd",))
+    collision = cfg.sim.physics.collision_cfg
+
+    assert collision is not None
+    assert collision.contact_matching != "disabled"
+    assert collision.max_triangle_pairs < 1 << int(CONTACT_ID_BITS)
 
 
 def test_displayport_newton_vbd_preserves_policy_task_contract():

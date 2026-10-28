@@ -61,6 +61,10 @@ _OSC_STIFFNESS = (300.0,) * 6
 _OSC_DAMPING_RATIO = (1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
 _NEWTON_NUM_ENVS = 256
 _NEWTON_MAX_TRIANGLE_PAIRS = 2**25
+# ``latest`` contact matching enables deterministic contact reduction. Newton
+# packs reducer indices into 20-bit IDs, so this is the largest valid shared
+# capacity; the 256-environment gate must remain free of overflow warnings.
+_VBD_MAX_TRIANGLE_PAIRS = (1 << 20) - 1
 _VBD_BODY_CONTACT_BUFFER_SIZE = 1024
 _FLANGE_FALLBACK_DENSITY = 1000.0
 
@@ -406,7 +410,7 @@ class DisplayportNewtonPhysicsCfg(PresetCfg):
         collision_cfg=NewtonCollisionPipelineCfg(
             reduce_contacts=True,
             contact_matching="latest",
-            max_triangle_pairs=_NEWTON_MAX_TRIANGLE_PAIRS,
+            max_triangle_pairs=_VBD_MAX_TRIANGLE_PAIRS,
         ),
         num_substeps=40,
         collision_decimation=1,

@@ -873,7 +873,7 @@ recommended fixed profile uses the stable Newton 1.6 release with:
    * - Parallel environments
      - 256 per distributed rank (1,024 total on four ranks)
    * - OSC
-     - Full inertial-dynamics decoupling enabled; task stiffness ``[300, 300, 300, 30, 30, 30]``; damping ratio ``[1, 1, 1, 1, 1, 1]``
+     - Full inertial-dynamics decoupling enabled; task stiffness ``[300, 300, 300, 300, 300, 300]``; damping ratio ``[1, 1, 1, 1, 1, 1]``
    * - Action and actuator contract
      - Translation ``[0.025, 0.025, 0.010]`` m, rotation ``0.025`` rad, and zero-gain effort-bounded IdealPD arm actuators
    * - Socket observation noise

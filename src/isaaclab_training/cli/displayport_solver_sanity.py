@@ -243,6 +243,36 @@ def _gravity_compensation_snapshot(robot: Any, gravity_m_s2: float = 9.81) -> di
     }
 
 
+def _rigid_contact_snapshot(raw_env: Any) -> dict[str, Any]:
+    """Return active Newton rigid-contact count, penetration, and force telemetry."""
+    import newton
+    import torch
+    import warp as wp
+
+    manager = raw_env.sim.physics_manager
+    contacts = getattr(manager, "_contacts", None)
+    model = getattr(manager, "_model", None)
+    state = getattr(manager, "_state_0", None)
+    if contacts is None or model is None or state is None:
+        return {"available": False}
+    count = int(wp.to_torch(contacts.rigid_contact_count)[0].cpu())
+    snapshot: dict[str, Any] = {
+        "available": True,
+        "count": count,
+        "maximum_penetration_m": 0.0,
+        "maximum_force_n": 0.0,
+    }
+    if count <= 0:
+        return snapshot
+    distance = wp.empty_like(contacts.rigid_contact_margin0)
+    newton.eval_rigid_contact_kinematics(model, state, contacts, out_distance=distance)
+    distance_t = wp.to_torch(distance)[:count]
+    force_t = wp.to_torch(contacts.rigid_contact_force)[:count]
+    snapshot["maximum_penetration_m"] = float(torch.clamp_min(-distance_t, 0.0).amax().cpu())
+    snapshot["maximum_force_n"] = float(torch.linalg.vector_norm(force_t, dim=-1).amax().cpu())
+    return snapshot
+
+
 def _scaled_linear_action(raw_env: Any, physical_delta_b: Any, maximum_step_m: float = 0.001) -> Any:
     """Convert a bounded physical translation in the robot base to an OSC action."""
     import torch
@@ -264,6 +294,7 @@ def _run_live_checks(
     *,
     probe_steps: int = 1,
     probe_only: bool = False,
+    move_plug_clear: bool = False,
 ) -> None:
     """Populate ``report`` with deterministic dynamics and contact evidence."""
     import isaaclab.utils.math as math_utils
@@ -291,6 +322,7 @@ def _run_live_checks(
         "gravity_compensation": bool(controller.gravity_compensation),
         "physics": type(raw.cfg.sim.physics).__name__,
         "solver": type(raw.cfg.sim.physics.solver_cfg).__name__,
+        "move_plug_clear": move_plug_clear,
     }
     if tuple(controller.motion_stiffness_task) != (300.0,) * 6:
         failures.append("OSC stiffness is not 300 on all six decoupled task axes")
@@ -305,18 +337,26 @@ def _run_live_checks(
     gravity_0 = _gravity_compensation_snapshot(robot)
     _reset(env)
     gravity_1 = _gravity_compensation_snapshot(robot)
+    gravity_compensation_enabled = "robot_body_gravity_compensation" in raw.event_manager.active_terms.get("reset", [])
     checks["gravity_compensation"] = {
+        "enabled": gravity_compensation_enabled,
         "maximum_force_n": gravity_1["maximum_force_n"],
         "maximum_expected_error_n": gravity_1["maximum_expected_error_n"],
         "maximum_change_after_second_reset_n": _maximum(
             torch.linalg.vector_norm(gravity_1["force_w"] - gravity_0["force_w"], dim=-1)
         ),
     }
-    if (
+    if gravity_compensation_enabled and (
         checks["gravity_compensation"]["maximum_expected_error_n"] > 1.0e-4
         or checks["gravity_compensation"]["maximum_change_after_second_reset_n"] > 1.0e-4
     ):
         failures.append("robot body gravity compensation is missing or accumulates across resets")
+    if move_plug_clear:
+        plug_pose = torch.cat((_to_torch(plug.data.root_pos_w), _to_torch(plug.data.root_quat_w)), dim=-1).clone()
+        plug_pose[:, 2] += 1.0
+        plug.write_root_pose_to_sim(plug_pose)
+        plug.write_root_velocity_to_sim(torch.zeros((raw.num_envs, 6), device=raw.device))
+        raw.sim.forward()
     arm_joint_ids, arm_joint_names = robot.find_joints(
         ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7"],
         preserve_order=True,
@@ -424,6 +464,7 @@ def _run_live_checks(
         "physical_termination_counts": physical_termination_counts,
         "unexpected_reset": unexpected_reset,
         "finite": finite_state,
+        "rigid_contacts": _rigid_contact_snapshot(raw),
     }
     checks["one_step_without_autoreset"] = one_step
     if unexpected_reset:
@@ -676,6 +717,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--report", default="artifacts/displayport_solver_sanity.json")
     parser.add_argument("--probe_steps", type=int, default=1)
     parser.add_argument("--probe_only", action="store_true")
+    parser.add_argument("--move_plug_clear", action="store_true")
     add_launcher_args(parser)
     parser.set_defaults(_setup_preset_cli=setup_preset_cli)
     return parser
@@ -721,7 +763,13 @@ def main() -> int:
             env = None
             try:
                 env = gym.make(args.task, cfg=env_cfg)
-                _run_live_checks(env, report, probe_steps=args.probe_steps, probe_only=args.probe_only)
+                _run_live_checks(
+                    env,
+                    report,
+                    probe_steps=args.probe_steps,
+                    probe_only=args.probe_only,
+                    move_plug_clear=args.move_plug_clear,
+                )
             finally:
                 output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
                 if env is not None:

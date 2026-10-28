@@ -71,6 +71,23 @@ _FLANGE_FALLBACK_DENSITY = 1000.0
 _LOGGER = logging.getLogger(__name__)
 
 
+@configclass
+class _DisplayportVBDSolverCfg(VBDSolverCfg):
+    """Expose VBD structural-joint material settings for solver diagnostics."""
+
+    rigid_joint_linear_ke: float = 1.0e5
+    """Structural linear-joint stiffness [N/m]."""
+
+    rigid_joint_angular_ke: float = 1.0e5
+    """Structural angular-joint stiffness [N·m/rad]."""
+
+    rigid_joint_linear_kd: float = 0.0
+    """Structural linear-joint damping [N·s/m]."""
+
+    rigid_joint_angular_kd: float = 0.0
+    """Structural angular-joint damping [N·m·s/rad]."""
+
+
 def _compensate_articulation_body_gravity(
     env: ManagerBasedEnv,
     env_ids: torch.Tensor | None,
@@ -401,7 +418,7 @@ class DisplayportNewtonPhysicsCfg(PresetCfg):
         use_cuda_graph=True,
     )
     newton_vbd: NewtonCfg = NewtonCfg(
-        solver_cfg=VBDSolverCfg(
+        solver_cfg=_DisplayportVBDSolverCfg(
             iterations=20,
             rigid_compliant_alm=True,
             rigid_contact_history=True,

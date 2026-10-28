@@ -826,6 +826,10 @@ def test_displayport_newton_vbd_preset_has_stability_profile():
     assert solver.rigid_compliant_alm is True
     assert solver.rigid_contact_history is True
     assert solver.rigid_body_contact_buffer_size >= 1024
+    assert solver.rigid_joint_linear_ke == pytest.approx(1.0e5)
+    assert solver.rigid_joint_angular_ke == pytest.approx(1.0e5)
+    assert solver.rigid_joint_linear_kd == pytest.approx(0.0)
+    assert solver.rigid_joint_angular_kd == pytest.approx(0.0)
 
     collision = physics.collision_cfg
     assert collision is not None

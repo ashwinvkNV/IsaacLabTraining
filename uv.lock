@@ -17,7 +17,7 @@ prerelease-mode = "allow"
 overrides = [
     { name = "mujoco", specifier = ">=3.12.0,<3.13.dev0" },
     { name = "mujoco-warp", specifier = ">=3.12.0,<3.13.dev0" },
-    { name = "newton", extras = ["sim"], git = "https://github.com/dylanturpin/newton-collab.git?rev=65ab4b7973fafa81f6e17615600d2aae708b94e6" },
+    { name = "newton", extras = ["sim"], git = "https://github.com/dylanturpin/newton-collab.git?rev=8d6cb39fb45d54d19758d5dfb67e92682144a92e" },
     { name = "newton-usd-schemas", specifier = ">=0.5.0" },
     { name = "torch", marker = "(platform_machine != 'aarch64' and platform_machine != 'x86_64') or sys_platform != 'linux'", specifier = "==2.11.0" },
     { name = "torch", marker = "platform_machine == 'aarch64' and sys_platform == 'linux'", specifier = "==2.11.0", index = "https://download.pytorch.org/whl/cu130" },
@@ -1377,7 +1377,7 @@ wheels = [
 [[package]]
 name = "isaaclab"
 version = "3.0.0"
-source = { git = "https://github.com/shauryadNv/IsaacLab.git?subdirectory=tools%2Fwheel_builder&rev=a333a5fa898e9d8be8b615bda08ee44fa3956637#a333a5fa898e9d8be8b615bda08ee44fa3956637" }
+source = { git = "https://github.com/shauryadNv/IsaacLab.git?subdirectory=tools%2Fwheel_builder&rev=d663a957bcd7e91c4d6e6071f9b082bb723f7dae#d663a957bcd7e91c4d6e6071f9b082bb723f7dae" }
 dependencies = [
     { name = "alphashape", marker = "sys_platform == 'linux'" },
     { name = "botocore", marker = "sys_platform == 'linux'" },
@@ -1470,7 +1470,7 @@ sim = [
 
 [package.metadata]
 requires-dist = [
-    { name = "isaaclab", git = "https://github.com/shauryadNv/IsaacLab.git?subdirectory=tools%2Fwheel_builder&rev=a333a5fa898e9d8be8b615bda08ee44fa3956637" },
+    { name = "isaaclab", git = "https://github.com/shauryadNv/IsaacLab.git?subdirectory=tools%2Fwheel_builder&rev=d663a957bcd7e91c4d6e6071f9b082bb723f7dae" },
     { name = "pyyaml" },
 ]
 
@@ -2402,8 +2402,8 @@ wheels = [
 
 [[package]]
 name = "newton"
-version = "1.6.0.dev0"
-source = { git = "https://github.com/dylanturpin/newton-collab.git?rev=65ab4b7973fafa81f6e17615600d2aae708b94e6#65ab4b7973fafa81f6e17615600d2aae708b94e6" }
+version = "1.7.0.dev0"
+source = { git = "https://github.com/dylanturpin/newton-collab.git?rev=8d6cb39fb45d54d19758d5dfb67e92682144a92e#8d6cb39fb45d54d19758d5dfb67e92682144a92e" }
 dependencies = [
     { name = "warp-lang", marker = "sys_platform == 'linux'" },
 ]

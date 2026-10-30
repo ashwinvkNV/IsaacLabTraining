@@ -222,15 +222,14 @@ FeatherPGS needs solver-specific gravity compensation, friction coefficient
 mapping, contact-offset handling, and gripper settings. PPO, rewards,
 curriculum, assets, observations, and policy actions are otherwise unchanged.
 
-For reproducibility, this experiment pins Isaac Lab at `a333a5fa898e` and the
-last validated FeatherPGS fork at `65ab4b7973fa`. That pair was originally
-validated with Isaac Sim 6.0.1, but its current package metadata is incompatible
-with Isaac Sim 6.0.1's pinned `typing-extensions`; this repository therefore
-retains its resolvable Isaac Sim 6.1 dependency and requires the runtime gates
-above before training. The mutable `fpgs-main` branch now resolves to Newton 1.8
-development code, where `SolverFeatherPGS` was renamed to `SolverSteel` and its
-configuration API changed. Do not advance those pins until Isaac Lab's solver
-manager and this profile are ported and revalidated.
+For reproducibility, this experiment pins Isaac Lab at `d663a957bcd7` and the
+FeatherPGS fork at `8d6cb39fb45d`. The fork reports `1.7.0.dev0`; it predates
+the final Newton 1.7 tag and must not be described as final Newton 1.7. This
+repository retains its resolvable Isaac Sim 6.1 dependency and requires the
+runtime gates above before training. The mutable `fpgs-main` branch now resolves
+to Newton 1.8 development code, where `SolverFeatherPGS` was renamed to
+`SolverSteel` and its configuration API changed. Do not advance those pins
+until Isaac Lab's solver manager and this profile are ported and revalidated.
 
 > **Checkpoint compatibility:** the Newton actor consumes socket position first
 > and observes the raw flange pose. The PhysX task-space actor consumes the TCP

@@ -199,10 +199,10 @@ the FeatherPGS-specific gravity, friction, contact-offset, and gripper mappings,
 so this comparison is not a pure solver-only A/B. All policy-facing task
 contracts remain unchanged.
 
-This branch intentionally uses the immutable Newton fork commit
-`65ab4b7973fa`. The historical stack used Isaac Sim 6.0.1, but that release's
-`typing-extensions` pin conflicts with the required Isaac Lab commit's current
-metadata. This repository retains its resolvable Isaac Sim 6.1 dependency, so
+This branch intentionally uses Isaac Lab commit `d663a957bcd7` and the immutable
+Newton fork commit `8d6cb39fb45d`. The fork reports `1.7.0.dev0`, but predates
+the final Newton 1.7 tag; report results as Newton 1.7-dev rather than final
+Newton 1.7. This repository retains its resolvable Isaac Sim 6.1 dependency, so
 the runtime gates above are mandatory. Current `fpgs-main` renamed the solver to
 Steel and changed its configuration API; it requires a separate Isaac Lab
 manager port before use.

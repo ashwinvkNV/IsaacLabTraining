@@ -974,14 +974,14 @@ settings. Consequently, this is a controlled backend comparison, not a pure
 solver-only A/B. PPO, rewards, curriculum, assets, observations, and policy
 actions remain unchanged.
 
-The experiment intentionally pins Isaac Lab ``a333a5fa898e`` and the validated
-Newton fork ``65ab4b7973fa``. The historical stack used Isaac Sim 6.0.1, but
-that release's ``typing-extensions`` pin conflicts with the required Isaac Lab
-commit's current metadata. This repository retains its resolvable Isaac Sim 6.1
-dependency, so the runtime gates above are mandatory. Current ``fpgs-main`` is
-Newton 1.8 development code: it renamed ``SolverFeatherPGS`` to
-``SolverSteel`` and changed the solver configuration API. Port and revalidate
-the Isaac Lab manager before advancing those pins.
+The experiment intentionally pins Isaac Lab ``d663a957bcd7`` and the Newton
+fork ``8d6cb39fb45d``. The fork reports ``1.7.0.dev0`` but predates the final
+Newton 1.7 tag, so results must be labeled Newton 1.7-dev rather than final
+Newton 1.7. This repository retains its resolvable Isaac Sim 6.1 dependency, so
+the runtime gates above are mandatory. Current ``fpgs-main`` is Newton 1.8
+development code: it renamed ``SolverFeatherPGS`` to ``SolverSteel`` and
+changed the solver configuration API. Port and revalidate the Isaac Lab manager
+before advancing those pins.
 
 .. important::
 

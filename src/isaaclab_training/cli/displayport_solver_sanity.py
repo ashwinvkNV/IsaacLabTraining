@@ -56,6 +56,31 @@ def _minimum(value: Any) -> float:
     return float(torch.as_tensor(_to_torch(value)).detach().amin().cpu())
 
 
+def _probe_milestone_steps(probe_steps: int) -> tuple[int, ...]:
+    """Return binary-growth probe milestones including the final solver step."""
+    if probe_steps < 1:
+        raise ValueError(f"probe_steps must be positive, got {probe_steps}.")
+    milestones = {probe_steps}
+    step = 1
+    while step <= probe_steps:
+        milestones.add(step)
+        step *= 2
+    return tuple(sorted(milestones))
+
+
+def _configure_vbd_kinematic_root(env_cfg: Any) -> None:
+    """Select the kinematic-root asset callback for an explicit VBD diagnostic."""
+    from isaaclab_newton.physics import VBDSolverCfg
+
+    from isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s.task_space_newton_env_cfg import (
+        _spawn_rizon_with_vbd_kinematic_root,
+    )
+
+    if not isinstance(env_cfg.sim.physics.solver_cfg, VBDSolverCfg):
+        raise ValueError("--vbd_kinematic_root requires the VBD solver preset.")
+    env_cfg.scene.robot.spawn.func = _spawn_rizon_with_vbd_kinematic_root
+
+
 def _configure_reset(raw_env: Any, *, at_goal: bool, depth_m: float, lateral_offset_m: float = 0.0) -> None:
     """Configure the task's real reset term for one deterministic scenario."""
     curriculum = raw_env.event_manager.get_term_cfg("reset_plug_curriculum").func
@@ -383,6 +408,57 @@ def _newton_fk_consistency_snapshot(raw_env: Any) -> dict[str, Any]:
     }
 
 
+def _newton_root_body_snapshot(raw_env: Any) -> dict[str, Any]:
+    """Return Rizon root mass flags and every joint connecting it to the world."""
+    import newton
+
+    manager = raw_env.sim.physics_manager
+    model = getattr(manager, "_model", None)
+    required = ("body_flags", "body_inv_mass", "joint_type", "joint_parent", "joint_child")
+    if model is None or any(getattr(model, name, None) is None for name in required):
+        return {"available": False}
+
+    body_labels = [str(label) for label in model.body_label]
+    joint_labels = [str(label) for label in model.joint_label]
+    body_flags = _to_torch(model.body_flags)
+    body_inv_mass = _to_torch(model.body_inv_mass)
+    joint_type = _to_torch(model.joint_type)
+    joint_parent = _to_torch(model.joint_parent)
+    joint_child = _to_torch(model.joint_child)
+    root_indices = [index for index, label in enumerate(body_labels) if label.endswith("/Robot/base_link")]
+    if not root_indices:
+        return {"available": False, "reason": "No body label ends with /Robot/base_link."}
+
+    bodies = []
+    for body_index in root_indices:
+        flags = int(body_flags[body_index].cpu())
+        world_joints = []
+        for joint_index, child in enumerate(joint_child):
+            parent = int(joint_parent[joint_index].cpu())
+            child = int(child.cpu())
+            if parent == -1 and child == body_index:
+                world_joints.append(
+                    {
+                        "label": joint_labels[joint_index],
+                        "joint_index": joint_index,
+                        "type": int(joint_type[joint_index].cpu()),
+                        "parent": parent,
+                        "child": child,
+                    }
+                )
+        bodies.append(
+            {
+                "label": body_labels[body_index],
+                "body_index": body_index,
+                "flags": flags,
+                "inverse_mass_kg_inv": float(body_inv_mass[body_index].cpu()),
+                "kinematic": bool(flags & int(newton.BodyFlags.KINEMATIC)),
+                "world_joints": world_joints,
+            }
+        )
+    return {"available": True, "bodies": bodies}
+
+
 def _vbd_structural_snapshot(raw_env: Any) -> dict[str, Any]:
     """Return VBD's first-step structural residuals and stabilization setting."""
     import newton
@@ -563,6 +639,9 @@ def _run_live_checks(
         "move_plug_clear": move_plug_clear,
         "hand_hold_width": float(raw.cfg.hand_hold_width),
         "hand_close_width": float(raw.cfg.hand_close_width),
+        "robot_spawn_function": getattr(
+            raw.cfg.scene.robot.spawn.func, "__name__", str(raw.cfg.scene.robot.spawn.func)
+        ),
     }
     if tuple(controller.motion_stiffness_task) != (300.0,) * 6:
         failures.append("OSC stiffness is not 300 on all six decoupled task axes")
@@ -599,6 +678,7 @@ def _run_live_checks(
         raw.sim.forward()
     checks["newton_dynamics_at_reset"] = _newton_dynamics_snapshot(raw)
     checks["newton_fk_consistency_at_reset"] = _newton_fk_consistency_snapshot(raw)
+    checks["newton_root_body_at_reset"] = _newton_root_body_snapshot(raw)
     arm_joint_ids, arm_joint_names = robot.find_joints(
         ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7"],
         preserve_order=True,
@@ -639,6 +719,8 @@ def _run_live_checks(
     finite_state = True
     observations = None
     first_step: dict[str, Any] | None = None
+    milestone_steps = set(_probe_milestone_steps(probe_steps))
+    milestones: dict[str, Any] = {}
     original_termination_params = _suspend_grasp_terminations(raw)
     try:
         for step_index in range(probe_steps):
@@ -709,6 +791,18 @@ def _run_live_checks(
                 _maximum(math_utils.quat_error_magnitude(_to_torch(plug.data.root_quat_w), plug_quat_0)),
             )
             finite_state &= _scene_finite(raw, observations)
+            completed_steps = step_index + 1
+            if completed_steps in milestone_steps:
+                milestones[str(completed_steps)] = {
+                    "maximum_arm_speed_rad_s": _maximum(joint_vel),
+                    "maximum_gripper_speed_rad_s": _maximum(gripper_speed),
+                    "flange_translation_m": _maximum(torch.linalg.vector_norm(flange_pos - flange_pos_0, dim=-1)),
+                    "flange_rotation_rad": _maximum(math_utils.quat_error_magnitude(flange_quat, flange_quat_0)),
+                    "grasp_translation_m": _maximum(torch.linalg.vector_norm(grasp_pos - grasp_pos_0, dim=-1)),
+                    "grasp_rotation_rad": _maximum(math_utils.quat_error_magnitude(grasp_quat, grasp_quat_0)),
+                    "finite": finite_state,
+                    "robot_body_velocity": _robot_body_velocity_snapshot(robot),
+                }
             if step_index == 0:
                 first_step = {
                     "abs_joint_delta_rad": torch.amax(torch.abs(joint_pos - joint_pos_0), dim=0).cpu().tolist(),
@@ -740,6 +834,7 @@ def _run_live_checks(
         "probe_steps": probe_steps,
         "elapsed_simulation_s": probe_steps * raw.step_dt,
         "first_step": first_step,
+        "milestones": milestones,
         "arm_joint_names": list(arm_joint_names),
         "gripper_joint_names": gripper_joint_names,
         "maximum_abs_joint_delta_rad": maximum_joint_delta.cpu().tolist(),
@@ -1015,6 +1110,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--probe_only", action="store_true")
     parser.add_argument("--move_plug_clear", action="store_true")
     parser.add_argument("--disable_gripper_squeeze", action="store_true")
+    parser.add_argument(
+        "--vbd_kinematic_root",
+        action="store_true",
+        help="Author only the Rizon base as kinematic for the controlled VBD fixed-root diagnostic.",
+    )
     add_launcher_args(parser)
     parser.set_defaults(_setup_preset_cli=setup_preset_cli)
     return parser
@@ -1051,6 +1151,8 @@ def main() -> int:
         env_cfg.sim.device = args.device or env_cfg.sim.device
         env_cfg.episode_length_s = 60.0
         env_cfg.observations.policy.enable_corruption = False
+        if args.vbd_kinematic_root:
+            _configure_vbd_kinematic_root(env_cfg)
         if args.disable_gripper_squeeze:
             _disable_gripper_squeeze(env_cfg)
         if hasattr(env_cfg.events, "randomize_arm_joint_friction"):

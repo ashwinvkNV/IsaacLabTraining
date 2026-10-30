@@ -12,7 +12,9 @@ import torch
 
 from isaaclab_training.cli.displayport_solver_sanity import (
     _newton_fk_consistency_snapshot,
+    _newton_root_body_snapshot,
     _pose_residual_snapshot,
+    _probe_milestone_steps,
     _vbd_structural_snapshot,
 )
 
@@ -58,4 +60,52 @@ def test_newton_snapshots_report_unavailable_without_runtime_state():
     raw_env = SimpleNamespace(sim=SimpleNamespace(physics_manager=SimpleNamespace()))
 
     assert _newton_fk_consistency_snapshot(raw_env) == {"available": False}
+    assert _newton_root_body_snapshot(raw_env) == {"available": False}
     assert _vbd_structural_snapshot(raw_env) == {"available": False}
+
+
+def test_probe_milestones_cover_binary_growth_and_final_step() -> None:
+    """The short dynamics diagnostic must expose when divergence begins."""
+    assert _probe_milestone_steps(1) == (1,)
+    assert _probe_milestone_steps(5) == (1, 2, 4, 5)
+    assert _probe_milestone_steps(120) == (1, 2, 4, 8, 16, 32, 64, 120)
+
+
+def test_newton_root_snapshot_reports_kinematic_fixed_root() -> None:
+    """Root telemetry must report both kinematic authoring and fixed-world topology."""
+    import newton
+
+    model = SimpleNamespace(
+        body_label=["/World/envs/env_0/Robot/base_link", "/World/envs/env_0/Robot/link1"],
+        body_flags=torch.tensor([int(newton.BodyFlags.KINEMATIC), int(newton.BodyFlags.DYNAMIC)]),
+        body_inv_mass=torch.tensor([0.0, 0.5]),
+        joint_label=["/World/envs/env_0/Robot/fixed_root", "/World/envs/env_0/Robot/joint1"],
+        joint_type=torch.tensor([int(newton.JointType.FIXED), int(newton.JointType.REVOLUTE)]),
+        joint_parent=torch.tensor([-1, 0]),
+        joint_child=torch.tensor([0, 1]),
+    )
+    raw_env = SimpleNamespace(sim=SimpleNamespace(physics_manager=SimpleNamespace(_model=model)))
+
+    snapshot = _newton_root_body_snapshot(raw_env)
+
+    assert snapshot == {
+        "available": True,
+        "bodies": [
+            {
+                "label": "/World/envs/env_0/Robot/base_link",
+                "body_index": 0,
+                "flags": int(newton.BodyFlags.KINEMATIC),
+                "inverse_mass_kg_inv": 0.0,
+                "kinematic": True,
+                "world_joints": [
+                    {
+                        "label": "/World/envs/env_0/Robot/fixed_root",
+                        "joint_index": 0,
+                        "type": int(newton.JointType.FIXED),
+                        "parent": -1,
+                        "child": 0,
+                    }
+                ],
+            }
+        ],
+    }

@@ -30,6 +30,7 @@ from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry
 import isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s  # noqa: F401
 from isaaclab_training.cli.displayport_solver_sanity import (
     _accumulate_termination_counts,
+    _configure_vbd_kinematic_root,
     _disable_gripper_squeeze,
 )
 from isaaclab_training.mdp import DeployOperationalSpaceControllerActionCfg
@@ -66,12 +67,14 @@ from isaaclab_training.tasks.displayport_insertion.config.displayport_rizon_4s.t
     DisplayportNewtonPhysicsCfg,
     Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg,
     Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg_PLAY,
+    _author_vbd_kinematic_root,
     _block_invalid_mesh_normals,
     _flatten_rizon_gripper_mimic_chains,
     _is_valid_diagonal_inertia,
     _is_valid_principal_axes,
     _spawn_plug_with_validated_sdf_meshes,
     _spawn_rizon_with_validated_flange_inertia,
+    _spawn_rizon_with_vbd_kinematic_root,
     _spawn_rizon_with_vbd_regularized_inertia,
     _spawn_socket_with_validated_sdf_meshes,
     _uniform_sphere_inertia,
@@ -122,6 +125,19 @@ def test_solver_sanity_disables_reset_squeeze_after_preset_resolution() -> None:
 
     assert env_cfg.hand_hold_width == pytest.approx(-0.05)
     assert env_cfg.hand_close_width == pytest.approx(-0.05)
+
+
+def test_solver_sanity_selects_kinematic_root_only_for_vbd() -> None:
+    """The diagnostic override must be explicit and unavailable to other solvers."""
+    vbd_cfg = resolve_presets(Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg(), selected=("newton_vbd",))
+
+    _configure_vbd_kinematic_root(vbd_cfg)
+
+    assert vbd_cfg.scene.robot.spawn.func is _spawn_rizon_with_vbd_kinematic_root
+
+    mjwarp_cfg = resolve_presets(Rizon4sTaskSpaceNewtonDisplayportInsertionEnvCfg(), selected=("newton_sdf",))
+    with pytest.raises(ValueError, match="requires the VBD solver"):
+        _configure_vbd_kinematic_root(mjwarp_cfg)
 
 
 def _observation_term_names(group: object) -> list[str]:
@@ -720,6 +736,34 @@ def test_newton_vbd_regularizes_only_lightweight_rizon_bodies_before_clone(monke
         gripper_base = UsdPhysics.MassAPI(stage.GetPrimAtPath(f"{root_path}/Grav_gripper/gripper_base"))
         assert gripper_base.GetMassAttr().Get() == pytest.approx(1.0e-4)
         assert tuple(gripper_base.GetDiagonalInertiaAttr().Get()) == pytest.approx(tuple(authored_inertia))
+
+
+def test_newton_vbd_kinematic_root_authors_only_the_robot_base() -> None:
+    """The VBD diagnostic mode must not turn moving robot links into kinematic bodies."""
+    from pxr import Usd, UsdGeom, UsdPhysics
+
+    stage = Usd.Stage.CreateInMemory()
+    robot = UsdGeom.Xform.Define(stage, "/World/Robot").GetPrim()
+    base = UsdGeom.Xform.Define(stage, "/World/Robot/base_link").GetPrim()
+    link = UsdGeom.Xform.Define(stage, "/World/Robot/link1").GetPrim()
+    UsdPhysics.RigidBodyAPI.Apply(base).CreateKinematicEnabledAttr(False)
+    UsdPhysics.RigidBodyAPI.Apply(link).CreateKinematicEnabledAttr(False)
+
+    assert _author_vbd_kinematic_root(robot) == "/World/Robot/base_link"
+    assert UsdPhysics.RigidBodyAPI(base).GetKinematicEnabledAttr().Get() is True
+    assert UsdPhysics.RigidBodyAPI(link).GetKinematicEnabledAttr().Get() is False
+    assert _author_vbd_kinematic_root(robot) == "/World/Robot/base_link"
+
+
+def test_newton_vbd_kinematic_root_rejects_missing_base() -> None:
+    """A changed robot hierarchy must fail rather than silently skipping the diagnostic factor."""
+    from pxr import Usd, UsdGeom
+
+    stage = Usd.Stage.CreateInMemory()
+    robot = UsdGeom.Xform.Define(stage, "/World/Robot").GetPrim()
+
+    with pytest.raises(ValueError, match="base_link"):
+        _author_vbd_kinematic_root(robot)
 
 
 def test_newton_flange_rejects_valid_inertia_with_invalid_principal_axes(monkeypatch: pytest.MonkeyPatch):

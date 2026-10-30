@@ -171,10 +171,10 @@ reduction, so the shared triangle-pair buffer uses the largest capacity that
 fits Newton's packed contact IDs. CUDA graph capture remains enabled.
 
 This experiment branch pins IsaacLab at
-`4db894c4088075379f6c8508073b83090c3b6ecb` and Newton main at
-`aad887137c1e55c4307d083daad8d19785a0bebe`. The MJWarp preset remains the
-default configuration, but the exact Newton 1.6 production control belongs on
-the production branch because this branch evaluates a newer Newton dependency.
+`4db894c4088075379f6c8508073b83090c3b6ecb`, Newton 1.7.0, and the compatible
+MuJoCo and MuJoCo Warp 3.15 release line. The MJWarp preset remains the default
+configuration. The exact Newton 1.6 production control belongs on the
+production branch because this branch evaluates a newer Newton dependency.
 
 Do not start a full training job with this profile until all of these gates pass
 on the exact target build and assets:
@@ -195,6 +195,13 @@ command with `physics=newton_vbd`. This profile is a solver experiment, not a
 validated deployment profile; do not export or deploy its checkpoints until it
 passes the stability gates and a separate simulation and real-robot policy
 qualification.
+
+To isolate fixed-root handling without changing the training configuration,
+the solver sanity command accepts `--vbd_kinematic_root`. It authors only the
+Rizon `base_link` as kinematic before Newton imports the scene and rejects
+non-VBD presets. Compare this opt-in diagnostic with the unchanged root under
+identical zero-gravity, zero-effort, contact-free conditions. Do not use this
+flag for policy training until the diagnostic and full solver gates pass.
 
 The nominal USD provides the portable training baseline. For policy training
 that should match a particular physical arm, provide that arm's validated

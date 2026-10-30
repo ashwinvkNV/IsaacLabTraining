@@ -328,6 +328,47 @@ def _regularize_vbd_rizon_body_inertia(root_prim, relative_path: str) -> bool:
     return changed
 
 
+def _author_vbd_kinematic_root(root_prim) -> str:
+    """Mark the Rizon base as kinematic for a controlled VBD fixed-root diagnostic.
+
+    Args:
+        root_prim: Spawned Rizon root prim.
+
+    Returns:
+        Path of the authored kinematic rigid body.
+
+    Raises:
+        ValueError: If the expected Rizon base rigid body is absent.
+    """
+    from pxr import UsdPhysics
+
+    base_path = root_prim.GetPath().AppendChild("base_link")
+    base = root_prim.GetStage().GetPrimAtPath(base_path)
+    if not base.IsValid():
+        raise ValueError(f"Rizon VBD asset does not contain the required base_link body {base_path}.")
+    rigid_body_api = UsdPhysics.RigidBodyAPI(base)
+    if not rigid_body_api:
+        raise ValueError(f"Rizon VBD base {base_path} must have UsdPhysics.RigidBodyAPI.")
+    rigid_body_api.CreateKinematicEnabledAttr().Set(True)
+    return str(base_path)
+
+
+def _condition_vbd_rizon(prim, usd_path: str, *, kinematic_root: bool) -> None:
+    """Apply shared VBD asset conditioning before scene cloning."""
+    _validate_or_author_flange_inertia(prim, usd_path)
+    regularized = tuple(
+        relative_path
+        for relative_path in _VBD_REGULARIZED_RIZON_BODY_PATHS
+        if _regularize_vbd_rizon_body_inertia(prim, relative_path)
+    )
+    if regularized:
+        _LOGGER.info("Regularized lightweight Rizon bodies for VBD: %s", regularized)
+    if kinematic_root:
+        base_path = _author_vbd_kinematic_root(prim)
+        _LOGGER.info("Authored kinematic Rizon root for VBD fixed-root diagnostic: %s", base_path)
+    _flatten_rizon_gripper_mimic_chains(prim)
+
+
 @clone
 def _spawn_rizon_with_validated_flange_inertia(
     prim_path: str,
@@ -354,16 +395,21 @@ def _spawn_rizon_with_vbd_regularized_inertia(
 ):
     """Spawn Rizon and condition lightweight moving bodies for the VBD solver."""
     prim = spawn_from_usd(prim_path, cfg, translation, orientation, **kwargs)
-    _validate_or_author_flange_inertia(prim, cfg.usd_path)
-    regularized = tuple(
-        relative_path
-        for relative_path in _VBD_REGULARIZED_RIZON_BODY_PATHS
-        if _regularize_vbd_rizon_body_inertia(prim, relative_path)
-    )
-    if regularized:
-        _LOGGER.info("Regularized lightweight Rizon bodies for VBD: %s", regularized)
+    _condition_vbd_rizon(prim, cfg.usd_path, kinematic_root=False)
+    return prim
 
-    _flatten_rizon_gripper_mimic_chains(prim)
+
+@clone
+def _spawn_rizon_with_vbd_kinematic_root(
+    prim_path: str,
+    cfg,
+    translation: tuple[float, float, float] | None = None,
+    orientation: tuple[float, float, float, float] | None = None,
+    **kwargs,
+):
+    """Spawn the conditioned VBD Rizon with a kinematic fixed root for diagnostics."""
+    prim = spawn_from_usd(prim_path, cfg, translation, orientation, **kwargs)
+    _condition_vbd_rizon(prim, cfg.usd_path, kinematic_root=True)
     return prim
 
 

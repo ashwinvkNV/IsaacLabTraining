@@ -969,6 +969,7 @@ def test_displayport_newton_vbd_preset_has_stability_profile():
     assert solver.iterations == 20
     assert solver.rigid_compliant_alm is True
     assert solver.rigid_contact_history is True
+    assert solver.rigid_contact_k_start == pytest.approx(1.0e2)
     assert solver.rigid_body_contact_buffer_size >= 1024
     assert solver.rigid_joint_linear_ke == pytest.approx(1.0e5)
     assert solver.rigid_joint_angular_ke == pytest.approx(1.0e5)
@@ -983,6 +984,7 @@ def test_displayport_newton_vbd_preset_has_stability_profile():
     from newton.solvers import SolverVBD
 
     solver_kwargs = NewtonVBDManager._filter_solver_kwargs(SolverVBD, solver)
+    assert solver_kwargs["rigid_contact_k_start"] == pytest.approx(1.0e2)
     assert "rigid_avbd_joint_alpha" in solver_kwargs
     assert solver_kwargs["rigid_avbd_joint_alpha"] is None
 

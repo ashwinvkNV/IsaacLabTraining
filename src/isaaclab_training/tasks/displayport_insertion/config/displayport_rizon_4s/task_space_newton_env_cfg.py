@@ -88,6 +88,9 @@ _LOGGER = logging.getLogger(__name__)
 class _DisplayportVBDSolverCfg(VBDSolverCfg):
     """Expose VBD structural-joint material settings for solver diagnostics."""
 
+    rigid_contact_k_start: float = 1.0e2
+    """Legacy AVBD body-contact penalty ramp seed [N/m]."""
+
     rigid_avbd_joint_alpha: float | None = None
     """Joint residual fraction subtracted as ``C - alpha * C0``, or ``None`` for Newton's mode default."""
 

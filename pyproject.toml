@@ -34,7 +34,7 @@ leapp = ["leapp==0.6.1"]
 sim = ["isaacsim[all,extscache]==6.1.0.0"]
 
 [tool.uv.sources]
-isaaclab = { git = "https://github.com/shauryadNv/IsaacLab.git", rev = "d663a957bcd7e91c4d6e6071f9b082bb723f7dae", subdirectory = "tools/wheel_builder" }
+isaaclab = { git = "https://github.com/shauryadNv/IsaacLab.git", rev = "ac94fe7b9a821674a9c6fc71efd25e661b52793d", subdirectory = "tools/wheel_builder" }
 torch = [
   { index = "pytorch-cu128", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
   { index = "pytorch-cu130", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },

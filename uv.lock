@@ -1377,7 +1377,7 @@ wheels = [
 [[package]]
 name = "isaaclab"
 version = "3.0.0"
-source = { git = "https://github.com/shauryadNv/IsaacLab.git?subdirectory=tools%2Fwheel_builder&rev=d663a957bcd7e91c4d6e6071f9b082bb723f7dae#d663a957bcd7e91c4d6e6071f9b082bb723f7dae" }
+source = { git = "https://github.com/shauryadNv/IsaacLab.git?subdirectory=tools%2Fwheel_builder&rev=ac94fe7b9a821674a9c6fc71efd25e661b52793d#ac94fe7b9a821674a9c6fc71efd25e661b52793d" }
 dependencies = [
     { name = "alphashape", marker = "sys_platform == 'linux'" },
     { name = "botocore", marker = "sys_platform == 'linux'" },
@@ -1470,7 +1470,7 @@ sim = [
 
 [package.metadata]
 requires-dist = [
-    { name = "isaaclab", git = "https://github.com/shauryadNv/IsaacLab.git?subdirectory=tools%2Fwheel_builder&rev=d663a957bcd7e91c4d6e6071f9b082bb723f7dae" },
+    { name = "isaaclab", git = "https://github.com/shauryadNv/IsaacLab.git?subdirectory=tools%2Fwheel_builder&rev=ac94fe7b9a821674a9c6fc71efd25e661b52793d" },
     { name = "pyyaml" },
 ]
 
